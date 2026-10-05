@@ -348,8 +348,9 @@ const TRANSFORM_INPUT_IDS = new Set([
  * @param {(tileFrac: number) => void} opts.onTypePicked  user picked a type
  * @param {() => object} [opts.getTransform]   { scaleU, scaleV, offsetU, offsetV, rotation, viewMm }
  * @param {(t: object) => void} [opts.setTransform]  apply { scaleU?, scaleV?, offsetU?, offsetV?, rotation? }
+ * @param {(entry) => boolean} [opts.isInUse]   another texture layer still shows this map (don't free it)
  */
-export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypePicked, getTransform, setTransform }) {
+export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypePicked, getTransform, setTransform, isInUse }) {
   const cfg = PROCEDURAL_KINDS[kind];
   const P = cfg.i18n;
   const paramsFor = (typeId) => ({ ...cfg.defaults, ...cfg.typeById(typeId).params });
@@ -400,7 +401,11 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
     });
   }
 
-  function deliver(px, size, job) {
+  /**
+   * Wrap generated pixels as a map entry. procState is the recipe that made
+   * it, so a texture layer, a saved project or an undo step can rebuild it.
+   */
+  function makeEntry(px, size, job) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
     const imageData = new ImageData(px, size, size);
@@ -410,15 +415,20 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
     const type = cfg.typeById(job.type);
     const name = `${MAP_PREFIX[kind]} ${type ? type.name : ''}`.trim();
     texture.name = name;
-    const prev = lastEntry;
-    lastEntry = {
+    return {
       name, fullCanvas: canvas, texture, imageData, width: size, height: size,
       isProcedural: true, proceduralKind: kind, rev: ++rev, tileMul: tileMulOf(job.params),
+      procState: { kind, type: job.type, params: { ...job.params }, resolution: job.res },
     };
+  }
+
+  function deliver(px, size, job) {
+    const prev = lastEntry;
+    lastEntry = makeEntry(px, size, job);
     lastEntryKey = size === fullSize(job) ? job.key : null;
     drawPreview();
     onMap(lastEntry, displayName());
-    if (prev && prev.texture) prev.texture.dispose();
+    if (prev && prev.texture && !(isInUse && isInUse(prev))) prev.texture.dispose();
   }
 
   const displayName = () =>
@@ -717,6 +727,38 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
     },
     getState() {
       return { kind, type: state.type, params: { ...state.params }, resolution: state.resolution };
+    },
+    /**
+     * Render a saved recipe at full resolution without touching the panel —
+     * for texture layers that are not the one being edited.
+     */
+    async render(saved) {
+      if (!saved || typeof saved !== 'object') return null;
+      const type = cfg.typeById(saved.type) ? saved.type : cfg.defaultType;
+      const job = {
+        type, params: { ...paramsFor(type), ...(saved.params || {}) },
+        res: RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_RESOLUTION,
+      };
+      const px = await generateMap(kind, job.params, fullSize(job));
+      return makeEntry(px, fullSize(job), job);
+    },
+    /**
+     * Show an existing entry of this generator (switching to its texture
+     * layer, undo): the sliders follow its recipe, nothing is regenerated.
+     */
+    adopt(entry) {
+      const saved = entry && entry.procState;
+      if (!saved) return false;
+      state.type = cfg.typeById(saved.type) ? saved.type : cfg.defaultType;
+      state.params = { ...paramsFor(state.type), ...(saved.params || {}) };
+      state.resolution = RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_RESOLUTION;
+      syncControls();
+      lastEntry = entry;
+      lastEntryKey = stateKey();
+      version++; delivered = version; want = null;   // a result still in flight for an older recipe is stale now
+      setBusy(false);
+      drawPreview();
+      return true;
     },
     /** Restore a saved state (project / session / undo) and regenerate. */
     restore(saved) {
