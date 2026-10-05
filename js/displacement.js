@@ -108,6 +108,12 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
   const zoneAreaZ = new Float64Array(uniqueCount);
 
   // maskedFrac: [maskedArea, totalArea] per unique vertex (replaces maskedFracMap)
+  // Engrave-bed: the face lying on the print bed is textured INWARD (up into
+  // the part) instead of being masked, so the texture's high points stay on the
+  // bed plane and the part still sits flat. bedVert marks its vertices.
+  const bedZ = bounds.min.z + 0.05;
+  const bedVert = settings.engraveBed ? new Uint8Array(uniqueCount) : null;
+
   const maskedFracMasked = new Float64Array(uniqueCount);
   const maskedFracTotal  = new Float64Array(uniqueCount);
 
@@ -138,7 +144,9 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     const faceArea   = faceNrm.length();                               // âˆ 2Ã— triangle area
     const faceNzNorm = faceArea > 1e-12 ? faceNrm.z / faceArea : 0;  // unit-normal Z component
     const faceAngle  = Math.acos(Math.abs(faceNzNorm)) * (180 / Math.PI);
-    const angleMasked = faceNzNorm < 0
+    const onBed = !!bedVert && faceNzNorm < -0.98 && vA.z <= bedZ && vB.z <= bedZ && vC.z <= bedZ;
+    if (onBed) { bedVert[vertexId[t]] = 1; bedVert[vertexId[t + 1]] = 1; bedVert[vertexId[t + 2]] = 1; }
+    const angleMasked = onBed ? false : faceNzNorm < 0
       ? (settings.bottomAngleLimit > 0 && faceAngle <= settings.bottomAngleLimit)
       : (settings.topAngleLimit    > 0 && faceAngle <= settings.topAngleLimit);
     // Threshold >0.99 (not 0.5) prevents shared-vertex MAX-propagation from
@@ -538,9 +546,27 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     const falloffFactor = falloffArr ? falloffArr[vid] : 1.0;
     const disp = (isFaceExcluded || isSealedBoundary) ? 0 : falloffFactor * (1 - maskedFrac) * centeredGrey * settings.amplitude;
 
-    const newX = tmpPos.x + smoothNrmX[vid] * disp;
-    const newY = tmpPos.y + smoothNrmY[vid] * disp;
+    let   newX = tmpPos.x + smoothNrmX[vid] * disp;
+    let   newY = tmpPos.y + smoothNrmY[vid] * disp;
     let   newZ = tmpPos.z + smoothNrmZ[vid] * disp;
+
+    if (bedVert && bedVert[vid]) {
+      // Bed face: recess straight up by (1 − texture) × depth. White stays on
+      // the bed plane (the contact points), darker areas lift into the part.
+      // Only the darkest part of the texture recesses: grey above the contact
+      // threshold stays on the bed, so (engraveContact) of the face grips the
+      // plate and the recesses are short spans the slicer can bridge.
+      // engraveThr = the grey level exceeded by exactly engraveContact of the
+      // texture (a percentile, computed in main.js), so the contact share is
+      // what the slider says whatever the texture's tone distribution.
+      const thr = Math.max(0.02, settings.engraveThr ?? (1 - (settings.engraveContact ?? 0.5)));
+      const depth = Math.max(0, thr - grey) / thr;
+      const engrave = (isFaceExcluded || isSealedBoundary) ? 0 : falloffFactor * depth * Math.abs(settings.amplitude);
+      newPos[i*3] = tmpPos.x; newPos[i*3+1] = tmpPos.y; newPos[i*3+2] = tmpPos.z + engrave;
+      newNrm[i*3] = tmpNrm.x; newNrm[i*3+1] = tmpNrm.y; newNrm[i*3+2] = tmpNrm.z;
+      if (onProgress && i % REPORT_EVERY === 0) onProgress(i / count);
+      continue;
+    }
 
     // Prevent boundary vertices from poking through the masked surface in Z.
     // Only triggers for vertices that are partly masked (maskedFrac > 0) and

@@ -46,6 +46,8 @@ const sharedGLSL = /* glsl */`
   uniform float     capAngle;
   uniform int       symmetricDisplacement;
   uniform int       noDownwardZ;
+  uniform int       engraveBed;
+  uniform float     engraveContact;
   uniform int       useDisplacement;
   uniform vec2      textureAspect;
 
@@ -229,6 +231,7 @@ const vertexShader = /* glsl */`
   varying float vFaceMask;    // combined mask (angle + user exclusion + boundary falloff)
   varying float vUserMask;    // raw user-exclusion mask (0 = user-excluded, 1 = included)
   varying float vMaskType;    // boundary mask type (0 = user mask, 1 = angle mask)
+  varying float vOnBed;       // 1 on an engraved bed face (relief is recessed, not raised)
 
   void main() {
     vec3 safeN = length(normal) > 1e-6 ? normalize(normal) : vec3(0.0, 0.0, 1.0);
@@ -240,7 +243,8 @@ const vertexShader = /* glsl */`
     // Surface angle masking — hard per-face cutoff using flat face normal
     float surfaceAngle = degrees(acos(clamp(abs(fN.z), 0.0, 1.0)));
     float angleMask = 1.0;
-    if (fN.z <  0.0 && bottomAngleLimit >= 1.0)
+    bool onBed = engraveBed == 1 && fN.z < -0.98 && position.z <= boundsMin.z + 0.05;
+    if (fN.z <  0.0 && bottomAngleLimit >= 1.0 && !onBed)
       angleMask = min(angleMask, surfaceAngle > bottomAngleLimit ? 1.0 : 0.0);
     if (fN.z >= 0.0 && topAngleLimit >= 1.0)
       angleMask = min(angleMask, surfaceAngle > topAngleLimit ? 1.0 : 0.0);
@@ -248,6 +252,7 @@ const vertexShader = /* glsl */`
     vFaceMask = totalMask;
     vUserMask = faceMask;
     vMaskType = boundaryMaskTypeAttr;
+    vOnBed = onBed ? 1.0 : 0.0;
 
     if (useDisplacement == 1) {
       float h = computeHeightAtPoint(position, safeN, safeN);
@@ -260,6 +265,12 @@ const vertexShader = /* glsl */`
       pos = position + sN * h * amplitude;
       // Overhang protection: never move a vertex below its original Z.
       if (noDownwardZ == 1 && pos.z < position.z) pos.z = position.z;
+      // Engraved bed face: recess straight up, high points stay on the bed.
+      if (engraveBed == 1 && position.z <= boundsMin.z + 0.05 && sN.z < -0.5) {
+        float hb = computeHeightAtPoint(position, safeN, safeN);
+        float thr = max(0.02, engraveContact);   // carries the percentile threshold
+        pos = position + vec3(0.0, 0.0, max(0.0, thr - hb) / thr * abs(amplitude) * faceMask * boundaryFalloffAttr);
+      }
     }
 
     // Always pass the ORIGINAL position for UV computation in the fragment shader.
@@ -283,6 +294,10 @@ const fragmentShader = /* glsl */`
   uniform float     boundaryEdgeTexWidth;
   uniform float     boundaryFalloffDist;
   uniform int       boundaryFalloffCurve; // 0 = linear, 1 = s-curve, 2 = ease-in
+  uniform vec3      baseColor;            // preview colour (display-space RGB)
+  uniform float     specAmount;           // finish: highlight strength
+  uniform float     specPower;            // finish: highlight tightness
+  uniform float     darkLift;             // 0..1: rim light + sheen for dark colours
 
   varying vec3  vModelPos;
   varying vec3  vModelNormal;
@@ -292,6 +307,7 @@ const fragmentShader = /* glsl */`
   varying float vFaceMask;
   varying float vUserMask;
   varying float vMaskType;
+  varying float vOnBed;
 
   // Fragment-only wrapper: compute face-stable projection normal via dFdx
   // then delegate to the shared height function.
@@ -347,6 +363,8 @@ const fragmentShader = /* glsl */`
     h *= maskBlend;
     dhx *= maskBlend;
     dhy *= maskBlend;
+    // Engraved bed face: the texture goes INTO the part, so shade it recessed.
+    if (vOnBed > 0.5) { dhx = -dhx; dhy = -dhy; }
 
     vec3 dp1 = dFdx(vViewPos);
     vec3 dp2 = dFdy(vViewPos);
@@ -379,7 +397,7 @@ const fragmentShader = /* glsl */`
     // that specular highlights, diffuse response, and view-dependent shading
     // are perfectly consistent everywhere.  Mask tinting is applied AFTER
     // lighting as a colour blend so masked areas keep the same glossy look.
-    vec3 tealBase      = vec3(0.22, 0.68, 0.68);
+    vec3 tealBase      = baseColor;
     vec3 userMaskColor = vec3(0.85, 0.40, 0.15);
     vec3 angleMaskColor = vec3(0.45, 0.48, 0.50);
 
@@ -391,7 +409,7 @@ const fragmentShader = /* glsl */`
     float diff2 = max(dot(bumpN, L2), 0.0) * 0.35;
 
     vec3 H1   = normalize(L1 + V);
-    float spec = pow(max(dot(bumpN, H1), 0.0), 64.0) * 0.60;
+    float spec = pow(max(dot(bumpN, H1), 0.0), specPower) * specAmount;
 
     // Lit teal (identical for textured and masked surfaces)
     vec3 litTeal = tealBase * 0.55
@@ -411,9 +429,48 @@ const fragmentShader = /* glsl */`
     // Blend: 100% mask colour at the boundary, fading to 0% at falloff distance
     vec3 color = mix(litTeal, litMask, maskEffect);
 
+    // Dark filaments (graphite, black) barely show diffuse shading, so add
+    // what a real dark print shows under a lamp: a soft rim on silhouettes
+    // and ridges, and a neutral sheen on lit faces.
+    if (darkLift > 0.0) {
+      float rim = pow(1.0 - max(dot(bumpN, V), 0.0), 3.0);
+      color += darkLift * (rim * 0.30 * vec3(0.88, 0.91, 1.0) + diff1 * 0.10 * vec3(1.0, 0.98, 0.95));
+    }
+
     gl_FragColor = vec4(color, 1.0);
   }
 `;
+
+// ── Preview appearance (colour + finish) ─────────────────────────────────────
+// Shared uniform objects referenced by every preview material, so a colour
+// change repaints the model without rebuilding materials. Colours are used
+// as display-space RGB, the same convention as the original teal constant.
+
+export const FINISHES = {
+  matte: { specAmount: 0.08, specPower: 10 },
+  satin: { specAmount: 0.30, specPower: 32 },
+  silk:  { specAmount: 0.65, specPower: 80 },
+  gloss: { specAmount: 0.60, specPower: 64 },   // the original look
+};
+
+const APPEARANCE = {
+  baseColor:  { value: new THREE.Vector3(0.22, 0.68, 0.68) },
+  specAmount: { value: FINISHES.gloss.specAmount },
+  specPower:  { value: FINISHES.gloss.specPower },
+  darkLift:   { value: 0 },
+};
+
+/** @param {string} hex '#rrggbb'  @param {keyof FINISHES} finish */
+export function setPreviewAppearance(hex, finish) {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  if (Number.isFinite(n)) APPEARANCE.baseColor.value.set(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+  const c = APPEARANCE.baseColor.value;
+  const lum = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
+  APPEARANCE.darkLift.value = Math.min(1, Math.max(0, (0.4 - lum) / 0.4));
+  const f = FINISHES[finish] || FINISHES.gloss;
+  APPEARANCE.specAmount.value = f.specAmount;
+  APPEARANCE.specPower.value = f.specPower;
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -469,6 +526,8 @@ export function updateMaterial(material, displacementTexture, settings) {
   u.capAngle.value                = settings.capAngle                ?? 20.0;
   u.symmetricDisplacement.value   = settings.symmetricDisplacement   ? 1 : 0;
   u.noDownwardZ.value             = settings.noDownwardZ             ? 1 : 0;
+  u.engraveBed.value              = settings.engraveBed              ? 1 : 0;
+  u.engraveContact.value          = settings.engraveThr ?? (1 - (settings.engraveContact ?? 0.5));
   u.useDisplacement.value         = settings.useDisplacement         ? 1 : 0;
   u.textureAspect.value.set(settings.textureAspectU ?? 1, settings.textureAspectV ?? 1);
   u.boundaryFalloffDist.value       = settings.boundaryFalloff           ?? 0.0;
@@ -506,6 +565,8 @@ function buildUniforms(tex, settings) {
     capAngle:                 { value: settings.capAngle                 ?? 20.0 },
     symmetricDisplacement:    { value: settings.symmetricDisplacement   ? 1 : 0 },
     noDownwardZ:              { value: settings.noDownwardZ             ? 1 : 0 },
+    engraveBed:               { value: settings.engraveBed              ? 1 : 0 },
+    engraveContact:           { value: settings.engraveThr ?? (1 - (settings.engraveContact ?? 0.5)) },
     useDisplacement:          { value: settings.useDisplacement         ? 1 : 0 },
     textureAspect:            { value: new THREE.Vector2(settings.textureAspectU ?? 1, settings.textureAspectV ?? 1) },
     boundaryEdgeTex:          { value: createFallbackDataTexture() },
@@ -513,6 +574,11 @@ function buildUniforms(tex, settings) {
     boundaryEdgeTexWidth:     { value: 1.0 },
     boundaryFalloffDist:        { value: settings.boundaryFalloff ?? 0.0 },
     boundaryFalloffCurve:       { value: FALLOFF_CURVE_INDEX[settings.boundaryFalloffCurve] ?? 0 },
+    // Shared objects: every preview material follows setPreviewAppearance().
+    baseColor:                  APPEARANCE.baseColor,
+    specAmount:                 APPEARANCE.specAmount,
+    specPower:                  APPEARANCE.specPower,
+    darkLift:                   APPEARANCE.darkLift,
   };
 }
 

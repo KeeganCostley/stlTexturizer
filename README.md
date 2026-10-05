@@ -1,3 +1,25 @@
+# BumpMesh Extended
+
+**Live:** https://keegancostley.github.io/stlTexturizer/
+**Source:** https://github.com/KeeganCostley/stlTexturizer
+
+An unofficial, extended fork of [BumpMesh by CNC Kitchen](https://github.com/CNCKitchen/stlTexturizer) (Stefan Hermann, AGPL-3.0). Everything runs locally in your browser, exactly like the original. All credit for the core tool goes to CNC Kitchen; the official site is https://bumpmesh.com.
+
+### What this fork adds
+
+- **Procedural map generators**: three new tabs next to the original texture library, all seamless and tunable with live sliders:
+  - **Rocks**: faceted crags, cleaved and split grains, schist family with crenulation / mica / porphyroblasts, veins, bedding.
+  - **Design**: TPMS gyroid family, guilloché, Japanese / Islamic craft patterns, tribal and cyber-sigilism tattoo styles grown organically.
+  - **Water**: Gerstner seas, surf-beach wave sets that tighten toward the shore, raindrop and interference rings, sand ripples with natural forks, swash marks, braided and meandering rivers, vortex streets, suminagashi marbling, caustics, cracked / pancake ice, frost ferns, crevasses, foam, bubbles and water beads.
+- **Interactive map preview**: drag to move the texture on the part, scroll to resize, Shift-drag to rotate.
+- **Auto-masking** of hidden surfaces (pins, bores, enclosed interiors) plus keep-out zones from CAD, so functional features stay untextured.
+- **Engrave the bed face**: the bed-contact face is textured inward, so the part still prints flat.
+- **Embossed / Engraved** one-click relief toggle.
+- **Project tabs**: several models open at once, each with its own mask, map and settings, saved in the browser.
+- Preview colour / finish picker and backdrops, middle-mouse pan, workspace persistence.
+
+---
+
 # BumpMesh by CNC Kitchen
 
 **Live:** https://bumpmesh.com  

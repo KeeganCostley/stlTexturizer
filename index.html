@@ -7,25 +7,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BumpMesh by CNC Kitchen</title>
+  <title>BumpMesh Extended · based on BumpMesh by CNC Kitchen</title>
   <meta name="description" content="BumpMesh by CNC Kitchen is a browser-based tool for adding displacement textures to STL, OBJ, and 3MF models locally, then exporting printable textured meshes." />
-  <link rel="canonical" href="https://bumpmesh.com/" />
+  <link rel="canonical" href="https://keegancostley.github.io/stlTexturizer/" />
   <meta property="og:locale" content="en_US" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="BumpMesh" />
-  <meta property="og:title" content="BumpMesh by CNC Kitchen" />
+  <meta property="og:title" content="BumpMesh Extended · based on BumpMesh by CNC Kitchen" />
   <meta property="og:description" content="Add displacement textures to STL, OBJ, and 3MF models directly in your browser. Preview, mask, bake, and export printable textured meshes locally." />
-  <meta property="og:url" content="https://bumpmesh.com/" />
-  <meta property="og:image" content="https://bumpmesh.com/assets/preview.jpg" />
-  <meta property="og:image:secure_url" content="https://bumpmesh.com/assets/preview.jpg" />
+  <meta property="og:url" content="https://keegancostley.github.io/stlTexturizer/" />
+  <meta property="og:image" content="https://keegancostley.github.io/stlTexturizer/assets/preview.jpg" />
+  <meta property="og:image:secure_url" content="https://keegancostley.github.io/stlTexturizer/assets/preview.jpg" />
   <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:width" content="2078" />
   <meta property="og:image:height" content="1091" />
   <meta property="og:image:alt" content="BumpMesh interface for previewing and exporting textured 3D models" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="BumpMesh by CNC Kitchen" />
+  <meta name="twitter:title" content="BumpMesh Extended · based on BumpMesh by CNC Kitchen" />
   <meta name="twitter:description" content="Add displacement textures to STL, OBJ, and 3MF models directly in your browser. Preview, mask, bake, and export printable textured meshes locally." />
-  <meta name="twitter:image" content="https://bumpmesh.com/assets/preview.jpg" />
+  <meta name="twitter:image" content="https://keegancostley.github.io/stlTexturizer/assets/preview.jpg" />
   <meta name="twitter:image:alt" content="BumpMesh interface for previewing and exporting textured 3D models" />
   <link rel="icon" type="image/png" href="logo.png" />
   <link rel="stylesheet" href="style.css" />
@@ -55,7 +55,7 @@
   <header>
     <div class="logo">
       <img src="logo.png" alt="BumpMesh" width="24" height="24" />
-      <span>BumpMesh <span id="app-version" class="app-version"></span> <small style="opacity:.6;font-weight:400">by <a href="https://www.youtube.com/@CNCKitchen" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline">CNC Kitchen</a></small></span>
+      <span>BumpMesh <span id="app-version" class="app-version"></span> <small style="opacity:.6;font-weight:400">by <a href="https://www.youtube.com/@CNCKitchen" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline">CNC Kitchen</a> · <a href="https://github.com/KeeganCostley/stlTexturizer" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:underline" title="Unofficial fork: procedural Rocks / Design / Water maps, auto-masking, project tabs and more">extended fork</a></small></span>
     </div>
     <div class="header-actions">
       <div class="project-io">
@@ -108,6 +108,7 @@
   <main>
     <!-- â”€â”€â”€ 3-D Viewport â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
     <section id="viewport-section">
+      <div id="project-tabs" class="project-tabs" role="tablist" aria-label="Projects"></div>
       <div id="drop-zone" class="drop-zone">
         <div id="drop-hint" class="drop-hint">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -164,6 +165,24 @@
           <span data-i18n="ui.perspective">Perspective View</span>
         </label>
 
+        <div class="preview-colour" id="preview-colour">
+          <span class="pc-label" data-i18n="ui.previewColour" data-i18n-title="ui.previewColourTip" title="Preview colour and finish: see the texture in the filament you'll print with. Display only; the export is unaffected.">Colour</span>
+          <div class="pc-swatches" id="pc-swatches" role="group"></div>
+          <input type="color" id="pc-custom" value="#3b3e44" data-i18n-title="ui.previewCustom" title="Custom colour" />
+          <select id="pc-finish" data-i18n-title="ui.previewFinishTip" title="Surface finish of the preview">
+            <option value="matte" data-i18n-opt="ui.finishMatte">Matte</option>
+            <option value="satin" data-i18n-opt="ui.finishSatin">Satin</option>
+            <option value="silk" data-i18n-opt="ui.finishSilk">Silk</option>
+            <option value="gloss" data-i18n-opt="ui.finishGloss">Gloss</option>
+          </select>
+          <select id="pc-backdrop" data-i18n-title="ui.backdropTip" title="Viewport background. Auto switches to studio grey when the model colour is too close to the background.">
+            <option value="auto" data-i18n-opt="ui.backdropAuto">BG: Auto</option>
+            <option value="dark" data-i18n-opt="ui.backdropDark">BG: Dark</option>
+            <option value="studio" data-i18n-opt="ui.backdropStudio">BG: Studio</option>
+            <option value="light" data-i18n-opt="ui.backdropLight">BG: Light</option>
+          </select>
+        </div>
+
         <div class="viewport-controls-hint" data-i18n="ui.controlsHint">Left drag: orbit &nbsp;Â·&nbsp; Right drag: pan &nbsp;Â·&nbsp; Scroll: zoom</div>
       </div>
     </section>
@@ -219,6 +238,19 @@
       <section class="panel-section">
         <h2 data-i18n="sections.displacementMap">Displacement Map</h2>
 
+        <!-- Map source: image library vs. procedural rock / design generators -->
+        <div class="map-source-tabs" role="tablist">
+          <button type="button" id="map-tab-library" class="map-source-tab active" role="tab" aria-selected="true" data-i18n="proc.tabLibrary">Original</button>
+          <button type="button" id="map-tab-rock" class="map-source-tab" role="tab" aria-selected="false" data-i18n="rock.tab">Rocks</button>
+          <button type="button" id="map-tab-design" class="map-source-tab" role="tab" aria-selected="false" data-i18n="design.tab">Design</button>
+          <button type="button" id="map-tab-water" class="map-source-tab" role="tab" aria-selected="false" data-i18n="water.tab">Water</button>
+        </div>
+
+        <div id="rock-pane" class="proc-pane hidden"></div>
+        <div id="design-pane" class="proc-pane hidden"></div>
+        <div id="water-pane" class="proc-pane hidden"></div>
+
+        <div id="library-pane">
         <!-- Preset grid -->
         <div id="preset-grid" class="preset-grid">
           <!-- filled by js/presetTextures.js -->
@@ -235,6 +267,7 @@
           <button id="custom-map-remove" class="custom-map-remove" data-i18n-title="ui.removeCustomMap" data-i18n-aria-label="ui.removeCustomMap" title="Remove custom map" aria-label="Remove custom map">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
+        </div>
         </div>
         <div id="active-map-name" class="active-map-name" data-i18n="ui.noMapSelected">No map selected</div>
         <div class="form-row slider-row">
@@ -300,12 +333,16 @@
       <!-- Displacement -->
       <section class="panel-section">
         <h2 data-i18n="sections.displacement">Displacement</h2>
+        <div class="excl-seg relief-toggle" role="group" aria-label="Relief direction">
+          <button id="relief-emboss" type="button" class="excl-seg-btn active" aria-pressed="true" data-i18n-title="relief.embossTitle" title="Texture rises out of the surface."><span class="relief-ico">▲</span><span data-i18n="relief.emboss">Embossed</span></button>
+          <button id="relief-engrave" type="button" class="excl-seg-btn" aria-pressed="false" data-i18n-title="relief.engraveTitle" title="Texture is cut into the surface."><span class="relief-ico">▼</span><span data-i18n="relief.engrave">Engraved</span></button>
+        </div>
         <div class="form-row slider-row">
           <label for="amplitude" data-i18n="labels.textureHeight">Texture height (mm)</label>
           <input type="range" id="amplitude" min="0" max="2" step="0.01" value="0.5" />
           <input type="number" class="val" id="amplitude-val" value="0.5" min="0" max="100" step="0.01" data-wheel-decimals="2" />
         </div>
-        <div class="form-row">
+        <div class="form-row hidden">
           <label class="checkbox-label" for="invert-displacement">
             <input type="checkbox" id="invert-displacement" />
             <span data-i18n="labels.invertDisplacement">Invert (push in instead of out)</span>
@@ -392,6 +429,43 @@
           <input type="range" id="top-angle-limit" min="0" max="90" step="1" value="0" />
           <input type="number" class="val" id="top-angle-limit-val" value="0" min="0" max="90" step="1" />
         </div>
+
+        <div class="form-row">
+          <label class="checkbox-label" for="engrave-bed-chk" data-i18n-title="ui.engraveBedTip" title="Texture the face that lies on the print bed INWARD instead of leaving it plain. The texture's high points stay exactly on the bed plane, so the part still sits flat; the rest is recessed up into the part.">
+            <input type="checkbox" id="engrave-bed-chk" />
+            <span data-i18n="ui.engraveBed">Engrave the bed face (still prints flat)</span>
+          </label>
+        </div>
+        <div class="form-row slider-row">
+          <label for="engrave-contact" data-i18n="ui.engraveContact" data-i18n-title="ui.engraveContactTip" title="How much of the bed face stays flat on the plate. Only the darkest part of the texture is recessed. 50% grips well and keeps the recesses short enough to bridge; lower = more texture, less grip.">Bed contact %</label>
+          <input type="range" id="engrave-contact" min="10" max="90" step="1" value="50" />
+          <input type="number" class="val" id="engrave-contact-val" value="50" min="10" max="90" step="1" />
+        </div>
+
+        <!-- Auto-mask: exposure + keep-out zones -->
+        <h3 class="panel-subsection-heading" data-i18n="automask.heading" data-i18n-title="automask.headingTip" title="Automatically keep texture off surfaces that must stay exact.">Auto-mask ⓘ</h3>
+        <div class="form-row slider-row">
+          <label for="automask-exposure" data-i18n="automask.exposure" data-i18n-title="automask.exposureTip" title="Faces that see less open air than this are masked. Raise it to also catch window walls and recesses.">Exposure</label>
+          <input type="range" id="automask-exposure" min="5" max="95" step="1" value="70" />
+          <input type="number" class="val" id="automask-exposure-val" value="70" min="5" max="95" step="1" />
+        </div>
+        <div class="form-row slider-row">
+          <label for="automask-margin" data-i18n="automask.margin" data-i18n-title="automask.marginTip" title="Extend the mask by this many mm around masked areas: a clean untextured border around windows and ports. 0 = off.">Margin (mm)</label>
+          <input type="range" id="automask-margin" min="0" max="10" step="0.5" value="0" />
+          <input type="number" class="val" id="automask-margin-val" value="0" min="0" max="10" step="0.5" />
+        </div>
+        <div class="form-row">
+          <label class="checkbox-label" for="automask-cap" data-i18n-title="automask.capTip" title="Treat the bottom of the model as closed, as if the base plate were fitted. Keeps the inside of open-bottomed enclosures masked.">
+            <input type="checkbox" id="automask-cap" checked />
+            <span data-i18n="automask.cap">Closed base (open-bottom enclosures)</span>
+          </label>
+        </div>
+        <div class="automask-actions">
+          <button type="button" id="automask-hidden-btn" class="cylinder-axis-btn" data-i18n="automask.maskHidden" data-i18n-title="automask.maskHiddenTip" title="Mask interiors, internal pins and bosses, window walls: everything the outside world can't see.">Mask hidden surfaces</button>
+          <button type="button" id="automask-keepout-btn" class="cylinder-axis-btn" data-i18n="automask.keepout" data-i18n-title="automask.keepoutTip" title="Load keep-out volumes (STL/3MF/STEP) exported in the same coordinates as the model. Every face inside them is masked.">Keep-out zones…</button>
+          <input type="file" id="automask-keepout-input" accept=".stl,.obj,.3mf,.step,.stp" hidden />
+        </div>
+        <p id="automask-status" class="automask-status"></p>
 
         <!-- By Surface -->
         <h3 class="panel-subsection-heading" id="excl-section-heading" data-i18n="sections.surfaceMasking" data-i18n-title="tooltips.surfaceMasking" title="Mask surfaces to control which areas receive displacement.">By Surface â“˜</h3>
@@ -753,6 +827,26 @@
     </div>
   </div>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="module">
+    // Plain local servers (python -m http.server) send no cache headers, so the
+    // browser can keep stale copies of modules and workers indefinitely. When this
+    // stamp changes, re-fetch every script once (cache: 'reload' overwrites the
+    // cached copy), then start the app. Hosts without directory listings just skip it.
+    const BUILD = '2026-10-05.4';
+    try {
+      if (localStorage.getItem('bumpmesh-build') !== BUILD) {
+        const files = ['style.css'];
+        for (const dir of ['js/', 'js/i18n/']) {
+          try {
+            const html = await (await fetch(dir, { cache: 'reload' })).text();
+            for (const m of html.matchAll(/href="([^"?#/]+\.js)"/g)) files.push(dir + m[1]);
+          } catch { /* no listing */ }
+        }
+        await Promise.all(files.map(f => fetch(f, { cache: 'reload' }).catch(() => {})));
+        localStorage.setItem('bumpmesh-build', BUILD);
+      }
+    } catch { /* storage blocked: just load */ }
+    await import('./js/main.js');
+  </script>
 </body>
 </html>

@@ -225,6 +225,11 @@ export function initViewer(canvas) {
   controls.dampingFactor = 0.08;
   controls.screenSpacePanning = true;
   controls.enableZoom = false; // we handle zoom ourselves for cursor-centric behaviour
+  // Wheel-button drag pans the view (as in Bambu Studio / PrusaSlicer); the
+  // wheel itself still zooms. Right-drag keeps panning too.
+  controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+  // Stop the browser's middle-click autoscroll from hijacking the drag.
+  renderer.domElement.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
   // Same pole clamp for OrbitControls' own rotation (fallback before a model
   // is loaded) as for the custom pivot orbit below.
   controls.minPolarAngle = _POLAR_EPS;
@@ -520,6 +525,16 @@ function disposeGroup(group) {
  * @param {THREE.BufferGeometry} geometry
  * @param {THREE.Material} [material] – if omitted, a default material is used
  */
+// Colour of the plain (untextured-preview) mesh material; follows the preview colour picker.
+let _baseMeshColor = 0xaaaacc;
+export function setBaseMeshColor(hex) {
+  _baseMeshColor = typeof hex === 'string' ? parseInt(hex.replace('#', ''), 16) : hex;
+  if (currentMesh && currentMesh.material && currentMesh.material.isMeshStandardMaterial) {
+    currentMesh.material.color.setHex(_baseMeshColor);
+  }
+  requestRender();
+}
+
 export function loadGeometry(geometry, material) {
   // Clear previous mesh
   while (meshGroup.children.length) {
@@ -530,7 +545,7 @@ export function loadGeometry(geometry, material) {
   }
 
   const mat = material || new THREE.MeshStandardMaterial({
-    color: 0xaaaacc,
+    color: _baseMeshColor,
     roughness: 0.6,
     metalness: 0.1,
     side: THREE.DoubleSide,
@@ -586,7 +601,7 @@ export function setMeshMaterial(material) {
     currentMesh.material.dispose();
   }
   currentMesh.material = material || new THREE.MeshStandardMaterial({
-    color: 0xaaaacc,
+    color: _baseMeshColor,
     roughness: 0.6,
     metalness: 0.1,
     side: THREE.DoubleSide,
@@ -716,24 +731,50 @@ export function setSceneBackground(hexColor) {
   requestRender();
 }
 
-export function setViewerTheme(isLight) {
+// Viewport backdrops (background + matching grid). 'auto' follows the UI theme,
+// but switches to studio grey when the model colour would vanish against it
+// (a graphite print on the near-black dark theme, a white one on the light theme).
+const BACKDROPS = {
+  dark:   { bg: 0x111114, major: 0x333340, minor: 0x2a2a34 },
+  light:  { bg: 0xf0f0f5, major: 0xb0b0c8, minor: 0xd0d0e0 },
+  studio: { bg: 0x5a5d64, major: 0x74777f, minor: 0x666970 },
+};
+let _isLightTheme = false, _backdropMode = 'auto', _modelLum = 0.5;
+
+function _resolveBackdrop() {
+  if (_backdropMode !== 'auto' && BACKDROPS[_backdropMode]) return BACKDROPS[_backdropMode];
+  if (!_isLightTheme && _modelLum < 0.3) return BACKDROPS.studio;
+  if (_isLightTheme && _modelLum > 0.82) return BACKDROPS.studio;
+  return _isLightTheme ? BACKDROPS.light : BACKDROPS.dark;
+}
+
+function _applyBackdrop() {
   if (!scene) return;
-  scene.background = new THREE.Color(isLight ? 0xf0f0f5 : 0x111114);
+  const b = _resolveBackdrop();
+  scene.background = new THREE.Color(b.bg);
   const savedZ = grid ? grid.position.z : 0;
   if (grid) {
     scene.remove(grid);
     grid.geometry.dispose();
     grid.material.dispose();
   }
-  grid = new THREE.GridHelper(
-    200, 40,
-    isLight ? 0xb0b0c8 : 0x333340,
-    isLight ? 0xd0d0e0 : 0x2a2a34
-  );
+  grid = new THREE.GridHelper(200, 40, b.major, b.minor);
   grid.rotation.x = Math.PI / 2;
   grid.position.z = savedZ;
   scene.add(grid);
   requestRender();
+}
+
+export function setViewerTheme(isLight) {
+  _isLightTheme = isLight;
+  _applyBackdrop();
+}
+
+/** @param {'auto'|'dark'|'studio'|'light'} mode  @param {number} modelLum 0..1 */
+export function setBackdrop(mode, modelLum) {
+  _backdropMode = mode;
+  if (Number.isFinite(modelLum)) _modelLum = modelLum;
+  _applyBackdrop();
 }
 
 /**

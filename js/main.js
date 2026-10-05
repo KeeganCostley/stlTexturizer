@@ -15,6 +15,11 @@ import { estimateStep } from './stepLoader.js';
 import { resolveStepSettings } from './stepConvert.js';
 import { computeSmartResolution } from './smartResolution.js';
 import { loadAllThumbnails, loadFullPreset, loadCustomTexture, IMAGE_PRESETS }  from './presetTextures.js';
+import { initProceduralPanel } from './proceduralUI.js';
+import { initAutoMask } from './autoMaskUI.js';
+import { initPreviewAppearance } from './previewAppearance.js';
+import { loadTabs, saveTabs, createTabId, loadWorkspace, saveWorkspaceModel, saveWorkspaceState, deleteWorkspace } from './workspaceStore.js';
+import { initProjectTabs } from './projectTabs.js';
 import { createPreviewMaterial, updateMaterial } from './previewMaterial.js';
 import { subdivide }          from './subdivision.js';
 import { regularizeMesh }     from './regularize.js';
@@ -46,6 +51,8 @@ let _rotatePoseSnapshot = null; // { rot, trans } captured on rotate-mode entry,
 let currentStlName    = 'model'; // base filename of the loaded STL (no extension)
 let currentStlExt     = '.stl';  // source file extension (.stl/.obj/.3mf/.step/.stp), for the stats line
 let activeMapEntry    = null;   // { name, texture, imageData, width, height, isCustom? }
+const procGens        = {};     // procedural map panels (proceduralUI.js) by kind: 'rock' | 'design' | 'water'
+let _procWanted       = null;   // kind of the generator that owns the active map — late worker results from the other are dropped
 let _lastCustomMap    = null;   // most recent uploaded/imported custom-map entry, kept across preset switches so the thumbnail can re-activate it
 let previewMaterial   = null;
 let isExporting       = false;
@@ -61,6 +68,9 @@ let _falloffGeometry   = null;   // geometry the falloff was last computed for
 // ── Exclusion state ───────────────────────────────────────────────────────────
 let excludedFaces      = new Set();   // triangle indices in currentGeometry
 let triangleAdjacency  = null;        // Array from buildAdjacency
+let autoMask           = null;        // auto-mask panel API (autoMaskUI.js)
+let _restoringWorkspace = false;      // true while replaying the saved workspace (suppresses re-saving it)
+let _autoMaskFaces     = { hidden: new Set(), keepout: new Set() };   // faces each auto-mask tool last added
 let triangleCentroids  = null;        // Float32Array from buildAdjacency
 let triangleFaceNormals = null;       // Float32Array — local-space unit face normal per tri
 let exclusionTool      = null;        // 'brush' | 'bucket' | null
@@ -119,6 +129,8 @@ const settings = {
   boundaryFalloffCurve: 'ease',
   symmetricDisplacement: false,
   noDownwardZ: false,
+  engraveBed: false,
+  engraveContact: 0.5,
   smoothBottom: true,
   harvestFlatFaces: true,
   harvestTol: 0.005,
@@ -465,12 +477,44 @@ function _defaultTileMm(relFraction = DEFAULT_TILE_FRACTION) {
   return parseFloat((relFraction * _scaleAnchorMm()).toPrecision(3));
 }
 
+// Engrave-bed contact threshold: the grey level that exactly engraveContact of
+// the active map's pixels exceed. Cached per map + smoothing + contact value.
+let _engraveThrKey = null, _engraveThrVal = 0.5;
+function _engraveThreshold() {
+  if (!settings.engraveBed) return undefined;
+  const entry = getEffectiveMapEntry() || activeMapEntry;
+  if (!entry || !entry.imageData) return 1 - settings.engraveContact;
+  const key = `${entry.name}|${entry.rev ?? 0}|${settings.textureSmoothing}|${settings.engraveContact}`;
+  if (key === _engraveThrKey) return _engraveThrVal;
+  const d = entry.imageData.data, hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 4) hist[d[i]]++;
+  const total = d.length / 4, want = total * settings.engraveContact;
+  let acc = 0, level = 255;
+  for (; level > 0; level--) { acc += hist[level]; if (acc >= want) break; }
+  _engraveThrKey = key; _engraveThrVal = level / 255;
+  return _engraveThrVal;
+}
+
+/**
+ * Settings as the mapper should see them. Procedural rock maps with very large
+ * grains cover more than one Scale tile (entry.tileMul > 1), so the tile the
+ * mapper repeats is Scale × tileMul — grain size keeps growing past the point
+ * where only a couple of grains fit in one Scale tile.
+ */
+function _mapSettings(extra = {}) {
+  const mul = activeMapEntry?.tileMul ?? 1;
+  const base = { ...settings, bounds: currentBounds, engraveThr: _engraveThreshold(), ...extra };
+  if (mul === 1) return base;
+  return { ...base, scaleU: settings.scaleU * mul, scaleV: settings.scaleV * mul };
+}
+
 // Compute the active U texture-aspect factor (mirrors updatePreview's logic so
 // the snap math agrees with what computeUV actually does).
 function _currentTextureAspectU() {
   const tw = activeMapEntry?.width ?? 1, th = activeMapEntry?.height ?? 1;
   const tmax = Math.max(tw, th, 1);
-  return tmax / Math.max(tw, 1);
+  // Giant-grain rock maps span tileMul Scale tiles → fewer repeats per wrap.
+  return tmax / Math.max(tw, 1) / (activeMapEntry?.tileMul ?? 1);
 }
 
 // True when the active mapping mode wraps U around the model, so snapping the
@@ -1079,7 +1123,19 @@ showWelcomeIfNeeded();
 scaleUVal.value = fmtScaleVal(posToScale(parseFloat(scaleUSlider.value)));
 scaleVVal.value = fmtScaleVal(posToScale(parseFloat(scaleVSlider.value)));
 
-// Load geometry immediately — don't wait for textures
+// Persistent workspace: the last model + its state survive closing the tab.
+// Seed the session snapshot from it (when this tab has none) so the normal
+// restore paths — settings, preset / rock / design map — pick it up too.
+let _tabs = await loadTabs();   // project tabs: { list:[{id,name,custom?}], active }
+const _savedWorkspace = await loadWorkspace(_tabs.active);
+try {
+  if (_savedWorkspace?.state?.settings && !sessionStorage.getItem('bumpmesh-settings')) {
+    sessionStorage.setItem('bumpmesh-settings', JSON.stringify(_savedWorkspace.state.settings));
+  }
+} catch { /* storage unavailable */ }
+
+// Load geometry immediately — don't wait for textures. A saved model replaces
+// the cube a moment later (see _restoreWorkspace at the end of this module).
 loadDefaultCube();
 
 // Build swatches with placeholder canvases, then load thumbnails
@@ -1126,11 +1182,16 @@ loadAllThumbnails().then(thumbs => {
     swatch.replaceChild(thumb.thumbCanvas, placeholder);
   });
 
-  let persistedName = null;
+  let persistedName = null, persistedProc = null;
   try {
     const raw = sessionStorage.getItem('bumpmesh-settings');
-    if (raw) persistedName = (JSON.parse(raw) || {}).activeMapName || null;
+    if (raw) {
+      const saved = JSON.parse(raw) || {};
+      persistedName = saved.activeMapName || null;
+      persistedProc = _procStateOf(saved);
+    }
   } catch { /* ignore */ }
+  if (persistedProc && _selectPresetByName(persistedName, false, persistedProc)) return;
 
   let targetIdx = -1;
   // If the user had ANY map active last session (preset or a since-discarded
@@ -1159,6 +1220,8 @@ let _selectGeneration = 0;   // debounce rapid preset clicks
 
 async function selectPreset(idx, swatchEl, applyDefaults = true) {
   const gen = ++_selectGeneration;
+  _procWanted = null;
+  showMapTab('library');
   document.querySelectorAll('.preset-swatch').forEach(s => s.classList.remove('active'));
   swatchEl.classList.add('active');
 
@@ -1193,6 +1256,88 @@ async function selectPreset(idx, swatchEl, applyDefaults = true) {
     swatchEl.classList.remove('preset-loading-full');
   }
 }
+
+// ── Map source tabs: original library / rock, design + water generators ────────────
+
+const libraryPane = document.getElementById('library-pane');
+const MAP_TABS = {
+  library: { tab: document.getElementById('map-tab-library'), pane: libraryPane },
+  rock:    { tab: document.getElementById('map-tab-rock'),    pane: document.getElementById('rock-pane') },
+  design:  { tab: document.getElementById('map-tab-design'),  pane: document.getElementById('design-pane') },
+  water:   { tab: document.getElementById('map-tab-water'),   pane: document.getElementById('water-pane') },
+};
+
+function showMapTab(which) {
+  for (const [key, { tab, pane }] of Object.entries(MAP_TABS)) {
+    const on = key === which;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-selected', String(on));
+    pane.classList.toggle('hidden', !on);
+  }
+  procGens[which]?.redraw();
+}
+
+/**
+ * Apply a texture transform from the map preview strip by driving the
+ * Transform panel's own number boxes, so clamping, seamless-wrap snapping,
+ * autosave and undo all behave exactly as if the user had typed the values.
+ */
+function _setTextureTransform({ scaleU, scaleV, offsetU, offsetV, rotation }) {
+  const fire = (el, v) => { el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })); };
+  if (scaleU != null) fire(scaleUVal, scaleU);
+  if (scaleV != null && !settings.lockScale) fire(scaleVVal, scaleV);
+  if (offsetU != null) fire(offsetUVal, offsetU);
+  if (offsetV != null) fire(offsetVVal, offsetV);
+  if (rotation != null) fire(rotationVal, rotation);
+}
+
+/** Procedural recipe from a settings snapshot (`rock` is the pre-design-tab key). */
+function _procStateOf(snap) {
+  if (!snap) return null;
+  if (snap.procedural && procGens[snap.procedural.kind]) return snap.procedural;
+  if (snap.rock) return { kind: 'rock', ...snap.rock };
+  return null;
+}
+
+for (const kind of ['rock', 'design', 'water']) {
+  const pane = MAP_TABS[kind].pane;
+  procGens[kind] = initProceduralPanel({
+    kind,
+    container: pane,
+    getTileMm: () => settings.scaleU,
+    getTransform: () => ({
+      scaleU: settings.scaleU, scaleV: settings.scaleV,
+      offsetU: settings.offsetU || 0, offsetV: settings.offsetV || 0,
+      rotation: settings.rotation || 0,
+      viewMm: _scaleAnchorMm(),   // the strip spans the part's largest dimension
+    }),
+    setTransform: _setTextureTransform,
+    onMap: (entry, displayName) => {
+      if (_procWanted !== kind) return;   // user moved on to another map meanwhile
+      activeMapEntry = entry;
+      activeMapName.textContent = displayName;
+      document.querySelectorAll('.preset-swatch').forEach(s => s.classList.remove('active'));
+      pane.querySelector('.proc-type-active')?.classList.add('active');
+      updatePreview();
+      _autoSaveSettings();
+    },
+    onTypePicked: (tileFrac) => {
+      // Same as picking an image preset: fresh smoothing + a tile size suited
+      // to this texture on this model.
+      resetTextureSmoothing();
+      _applyScaleU(_defaultTileMm(tileFrac));
+    },
+  });
+  MAP_TABS[kind].tab.addEventListener('click', () => {
+    showMapTab(kind);
+    if (activeMapEntry?.proceduralKind !== kind) {
+      _procWanted = kind;
+      procGens[kind].activate();
+      _scheduleUndoCapture();
+    }
+  });
+}
+MAP_TABS.library.tab.addEventListener('click', () => showMapTab('library'));
 
 // ── Custom-map thumbnail (below the upload button) ───────────────────────────
 
@@ -1229,6 +1374,7 @@ function _hideCustomMapThumb() {
 /** Promote the kept-aside custom map back to the active map. No defaults reset. */
 function _activateCustomMap() {
   if (!_lastCustomMap) return;
+  _procWanted = null;
   activeMapEntry = _lastCustomMap;
   document.querySelectorAll('.preset-swatch').forEach(s => s.classList.remove('active'));
   customMapSwatch.classList.add('active');
@@ -1403,6 +1549,7 @@ function wireEvents() {
     try {
       activeMapEntry = await loadCustomTexture(file);
       activeMapEntry.isCustom = true;
+      _procWanted = null;
       _lastCustomMap = activeMapEntry;
       activeMapName.textContent = file.name;
       document.querySelectorAll('.preset-swatch').forEach(s => s.classList.remove('active'));
@@ -1516,8 +1663,18 @@ function wireEvents() {
   invertDisplacementCheckbox.addEventListener('change', () => {
     settings.invertDisplacement = invertDisplacementCheckbox.checked;
     settings.amplitude = (settings.invertDisplacement ? -1 : 1) * settings.textureHeight;
+    _syncReliefToggle();
     updatePreview();
   });
+  // Embossed / Engraved toggle: a two-button face for the invert checkbox.
+  for (const [id, inward] of [['relief-emboss', false], ['relief-engrave', true]]) {
+    document.getElementById(id)?.addEventListener('click', () => {
+      if (invertDisplacementCheckbox.checked === inward) return;
+      invertDisplacementCheckbox.checked = inward;
+      invertDisplacementCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  }
+  _syncReliefToggle();
   linkSlider(boundaryFalloffSlider, boundaryFalloffVal, v => { settings.boundaryFalloff = v; _falloffDirty = true; return v.toFixed(1); });
   for (const [mode, btn] of Object.entries(falloffCurveButtons)) {
     btn.addEventListener('click', () => setFalloffCurve(mode));
@@ -1543,6 +1700,20 @@ function wireEvents() {
     settings.symmetricDisplacement = symmetricDispToggle.checked;
     updatePreview();
   });
+  const engraveBedChk = document.getElementById('engrave-bed-chk');
+  const engraveContactSlider = document.getElementById('engrave-contact');
+  const engraveContactVal    = document.getElementById('engrave-contact-val');
+  if (engraveContactSlider) {
+    linkSlider(engraveContactSlider, engraveContactVal, v => { settings.engraveContact = v / 100; return Math.round(v); });
+  }
+  if (engraveBedChk) {
+    engraveBedChk.checked = !!settings.engraveBed;
+    engraveBedChk.addEventListener('change', () => {
+      settings.engraveBed = engraveBedChk.checked;
+      _falloffDirty = true;
+      updatePreview();
+    });
+  }
   noDownwardZChk.addEventListener('change', () => {
     settings.noDownwardZ = noDownwardZChk.checked;
     updatePreview();
@@ -1772,6 +1943,8 @@ function wireEvents() {
   exclClearBtn.addEventListener('click', () => {
     excludedFaces = new Set();
     precisionExcludedFaces = new Set();
+    _autoMaskFaces = { hidden: new Set(), keepout: new Set() };
+    autoMask.stopLive();
     refreshExclusionOverlay();
   });
 
@@ -1930,6 +2103,40 @@ function wireEvents() {
     if (e.key === 'Control') _clearShiftLinePreview();
   });
 }
+
+// ── Auto-mask (exposure + keep-out zones) ────────────────────────────────────
+// Each auto-mask tool owns the faces it last added, so re-running it (or
+// dragging the Exposure slider) replaces its previous result without touching
+// faces the user painted by hand.
+
+function _applyAutoMask(kind, faces) {
+  if (!currentGeometry) return;
+  if (selectionMode) setSelectionMode(false);   // auto-mask always excludes
+  maskModeChosen = true;
+  updateMaskModeButtons();
+  for (const f of _autoMaskFaces[kind]) excludedFaces.delete(f);
+  _autoMaskFaces[kind] = faces;
+  for (const set of Object.values(_autoMaskFaces)) for (const f of set) excludedFaces.add(f);
+  if (precisionMaskingEnabled && precisionGeometry && precisionParentMap) {
+    precisionExcludedFaces = new Set();
+    for (let i = 0; i < precisionParentMap.length; i++) {
+      if (excludedFaces.has(precisionParentMap[i])) precisionExcludedFaces.add(i);
+    }
+  }
+  refreshExclusionOverlay();
+  _scheduleUndoCapture();
+  _autoSaveSettings();
+}
+
+initPreviewAppearance();
+
+autoMask = initAutoMask({
+  getModel: () => (currentGeometry && triangleAdjacency)
+    ? { geometry: currentGeometry, adjacency: triangleAdjacency, centroids: triangleCentroids }
+    : null,
+  getPose: () => ({ rot: currentPoseRot, trans: currentPoseTrans }),
+  apply: _applyAutoMask,
+});
 
 // ── Exclusion helpers ─────────────────────────────────────────────────────────
 
@@ -2483,6 +2690,7 @@ function handlePlaceOnFaceClick(e) {
   // Rebuild adjacency
   const adjData = buildAdjacency(currentGeometry);
   triangleAdjacency = adjData.adjacency;
+  autoMask?.reset();
   triangleCentroids = adjData.centroids;
   triangleFaceNormals = adjData.faceNormals;
 
@@ -2662,6 +2870,7 @@ function _rotateFinalize() {
   // Rebuild adjacency for exclusion tools
   const adjData = buildAdjacency(currentGeometry);
   triangleAdjacency = adjData.adjacency;
+  autoMask?.reset();
   triangleCentroids = adjData.centroids;
   triangleFaceNormals = adjData.faceNormals;
 
@@ -2681,6 +2890,7 @@ function _rotateFinalize() {
   checkAmplitudeWarning();
   checkResolutionWarning();
   updatePreview();
+  _scheduleWorkspaceState();   // pose changed
 }
 
 function refreshExclusionOverlay() {
@@ -2964,6 +3174,10 @@ function loadDefaultCube() {
 
   loadGeometry(geo);
   dropHint.classList.add('hidden');
+  // The cube is clean by construction: drop any previous model's mesh report.
+  lastFastDiag = null; lastAdvancedDiag = null;
+  clearDiagHighlight();
+  meshDiagnostics.classList.add('hidden');
 
   // Reset displacement preview
   if (dispPreviewGeometry) { dispPreviewGeometry.dispose(); dispPreviewGeometry = null; }
@@ -2971,7 +3185,7 @@ function loadDefaultCube() {
   dispPreviewToggle.checked = false;
 
   // Reset exclusion state
-  excludedFaces     = new Set();
+  excludedFaces     = new Set(); _autoMaskFaces = { hidden: new Set(), keepout: new Set() };
   exclusionTool     = null;
   eraseMode         = false;
   isPainting        = false;
@@ -2996,6 +3210,7 @@ function loadDefaultCube() {
 
   const adjData = buildAdjacency(geo);
   triangleAdjacency = adjData.adjacency;
+  autoMask?.reset();
   triangleCentroids = adjData.centroids;
   triangleFaceNormals = adjData.faceNormals;
 
@@ -3207,7 +3422,7 @@ async function handleModelFile(file, stepSettings = null) {
     clearDiagHighlight();
 
     // Reset exclusion state for the new mesh
-    excludedFaces     = new Set();
+    excludedFaces     = new Set(); _autoMaskFaces = { hidden: new Set(), keepout: new Set() };
     precisionExcludedFaces = new Set();
     exclusionTool     = null;
     eraseMode         = false;
@@ -3234,6 +3449,8 @@ async function handleModelFile(file, stepSettings = null) {
     // typical STL sizes processed by this tool)
     const adjData = buildAdjacency(currentGeometry);
     triangleAdjacency = adjData.adjacency;
+    autoMask?.reset();
+  autoMask?.reset();
     triangleCentroids = adjData.centroids;
     triangleFaceNormals = adjData.faceNormals;
     updateMeshDiagnostics(adjData, currentGeometry.attributes.position.count / 3);
@@ -3264,6 +3481,7 @@ async function handleModelFile(file, stepSettings = null) {
     export3mfBtn.disabled = (activeMapEntry === null);
     updateSmartResBtnState();
     updatePreview();
+    if (!_restoringWorkspace) _saveWorkspaceModelNow();
   } catch (err) {
     // A superseded STEP import (user dropped another file mid-tessellation)
     // is not a failure — the newer load owns the UI now.
@@ -3474,7 +3692,7 @@ function applySmartResolution() {
   const result = computeSmartResolution({
     geometry: currentGeometry,
     bounds:   currentBounds,
-    settings,
+    settings: _mapSettings(),
     texture:  effective,
   });
   if (!result) return;
@@ -3676,7 +3894,7 @@ function computeBoundaryFalloffAttr(geometry, userMaskArr) {
       const len = Math.sqrt(fnx * fnx + fny * fny + fnz * fnz);
       const nz = len > 1e-6 ? fnz / len : 0;
       const surfaceAngle = Math.acos(Math.min(1, Math.abs(nz))) * (180 / Math.PI);
-      if (nz < 0 && settings.bottomAngleLimit >= 1)
+      if (nz < 0 && settings.bottomAngleLimit >= 1 && !_faceOnBed(posAttr, t, nz))
         angleMask = surfaceAngle > settings.bottomAngleLimit ? 1.0 : 0.0;
       if (nz >= 0 && settings.topAngleLimit >= 1)
         angleMask = Math.min(angleMask, surfaceAngle > settings.topAngleLimit ? 1.0 : 0.0);
@@ -3844,6 +4062,13 @@ function computeBoundaryFalloffAttr(geometry, userMaskArr) {
  * bump-only preview shader.  Each edge is stored as two RGBA texels
  * (endpoint A xyz, endpoint B xyz).
  */
+/** Engrave-bed: true for a face lying flat on the print bed (textured inward, not masked). */
+function _faceOnBed(posAttr, t, nz) {
+  if (!settings.engraveBed || nz > -0.98 || !currentBounds) return false;
+  const zMax = currentBounds.min.z + 0.05;
+  return posAttr.getZ(t * 3) <= zMax && posAttr.getZ(t * 3 + 1) <= zMax && posAttr.getZ(t * 3 + 2) <= zMax;
+}
+
 function computeBoundaryEdges(geometry, userMaskArr) {
   const posAttr = geometry.attributes.position;
   const posCount = posAttr.count;
@@ -3866,7 +4091,7 @@ function computeBoundaryEdges(geometry, userMaskArr) {
       const len = Math.sqrt(fnx * fnx + fny * fny + fnz * fnz);
       const nz = len > 1e-6 ? fnz / len : 0;
       const surfAngle = Math.acos(Math.min(1, Math.abs(nz))) * (180 / Math.PI);
-      if (nz < 0 && settings.bottomAngleLimit >= 1)
+      if (nz < 0 && settings.bottomAngleLimit >= 1 && !_faceOnBed(posAttr, t, nz))
         angleMask = surfAngle > settings.bottomAngleLimit ? 1.0 : 0.0;
       if (nz >= 0 && settings.topAngleLimit >= 1)
         angleMask = Math.min(angleMask, surfAngle > settings.topAngleLimit ? 1.0 : 0.0);
@@ -4085,7 +4310,7 @@ function getEffectiveMapEntry() {
     return activeMapEntry;
   }
   const { fullCanvas, width, height, name } = activeMapEntry;
-  const cacheKey = `${name}_${width}_${height}_${settings.textureSmoothing}`;
+  const cacheKey = `${name}_${activeMapEntry.rev ?? 0}_${width}_${height}_${settings.textureSmoothing}`;
   if (_effectiveMapCacheKey === cacheKey && _effectiveMapCache) {
     return _effectiveMapCache;
   }
@@ -4137,6 +4362,7 @@ function _regularizeOpts() {
 }
 
 function updatePreview() {
+  for (const g of Object.values(procGens)) g.refreshReadouts();   // mm hints follow the tile scale
   if (!currentGeometry || !currentBounds) return;
 
   // Texture aspect correction so non-square textures keep their proportions.
@@ -4145,12 +4371,10 @@ function updatePreview() {
   // wider-than-tall content.  The wider axis gets aspect = 1 (unchanged).
   const tw = activeMapEntry?.width ?? 1, th = activeMapEntry?.height ?? 1;
   const tmax = Math.max(tw, th, 1);
-  const fullSettings = {
-    ...settings,
-    bounds: currentBounds,
+  const fullSettings = _mapSettings({
     textureAspectU: tmax / Math.max(tw, 1),
     textureAspectV: tmax / Math.max(th, 1),
-  };
+  });
 
   if (!activeMapEntry) {
     // No map yet — plain material
@@ -4544,7 +4768,7 @@ async function toggleDisplacementPreview(enable) {
   if (!enable) {
     // Revert to original geometry with bump-only shading.
     if (currentGeometry && previewMaterial) {
-      updateMaterial(previewMaterial, getEffectiveMapEntry()?.texture, { ...settings, bounds: currentBounds });
+      updateMaterial(previewMaterial, getEffectiveMapEntry()?.texture, _mapSettings());
       updateFaceMask(currentGeometry);
       setMeshGeometry(currentGeometry);
     }
@@ -4648,7 +4872,7 @@ async function toggleDisplacementPreview(enable) {
       previewMaterial.dispose();
       previewMaterial = null;
     }
-    const fullSettings = { ...settings, bounds: currentBounds };
+    const fullSettings = _mapSettings();
     previewMaterial = createPreviewMaterial(getEffectiveMapEntry().texture, fullSettings);
     setMeshGeometry(dispPreviewGeometry);
     setMeshMaterial(previewMaterial);
@@ -4698,7 +4922,7 @@ function buildCombinedFaceWeights(geometry, excludedFaces, invert, settings) {
     const angleMasked = faceNzNorm < 0
       ? (settings.bottomAngleLimit > 0 && faceAngle <= settings.bottomAngleLimit)
       : (settings.topAngleLimit    > 0 && faceAngle <= settings.topAngleLimit);
-    if (angleMasked) {
+    if (angleMasked && !_faceOnBed(posAttr, t, faceNzNorm)) {   // engrave-bed: the bed face is textured inward, not frozen
       weights[t * 3]     = 1.0;
       weights[t * 3 + 1] = 1.0;
       weights[t * 3 + 2] = 1.0;
@@ -4787,7 +5011,7 @@ async function handleExport(format = 'stl') {
       imageData: exportEntry.imageData,
       imgWidth: exportEntry.width,
       imgHeight: exportEntry.height,
-      settings,
+      settings: _mapSettings(),
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'export',
@@ -5088,7 +5312,7 @@ async function bakeTextures() {
       imageData: exportEntry.imageData,
       imgWidth: exportEntry.width,
       imgHeight: exportEntry.height,
-      settings,
+      settings: _mapSettings(),
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'bake',
@@ -5245,6 +5469,7 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
   // by the exclusion overlay).
   const adjData = buildAdjacency(geometry);
   triangleAdjacency = adjData.adjacency;
+  autoMask?.reset();
   triangleCentroids = adjData.centroids;
   triangleFaceNormals = adjData.faceNormals;
   updateMeshDiagnostics(adjData, geometry.attributes.position.count / 3);
@@ -5306,7 +5531,7 @@ const PERSISTED_KEYS = [
   'mappingMode', 'scaleU', 'scaleV', 'lockScale',
   'offsetU', 'offsetV', 'rotation',
   'amplitude', 'textureHeight', 'invertDisplacement',
-  'symmetricDisplacement', 'noDownwardZ', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
+  'symmetricDisplacement', 'noDownwardZ', 'engraveBed', 'engraveContact', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
   'mappingBlend', 'seamBandWidth', 'capAngle', 'boundaryFalloff', 'boundaryFalloffCurve',
   'bottomAngleLimit', 'topAngleLimit',
   'refineLength', 'maxTriangles',
@@ -5324,6 +5549,8 @@ function getSettingsSnapshot() {
   snap.scaleUnit = 'mm';
   if (activeMapEntry) {
     snap.activeMapName = activeMapEntry.name;
+    // Procedural maps: store the recipe, not the pixels.
+    if (activeMapEntry.isProcedural) snap.procedural = procGens[activeMapEntry.proceduralKind].getState();
   } else {
     // Thumbnails may not have finished loading yet; preserve any previously
     // persisted preset name so a mid-load autosave doesn't wipe it.
@@ -5433,6 +5660,14 @@ function applySettingsSnapshot(snap) {
     symmetricDispToggle.checked = snap.symmetricDisplacement;
     symmetricDispToggle.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  if (snap.engraveContact != null) {
+    const sl = document.getElementById('engrave-contact'), nv = document.getElementById('engrave-contact-val');
+    if (sl) { sl.value = Math.round(snap.engraveContact * 100); nv.value = sl.value; settings.engraveContact = snap.engraveContact; }
+  }
+  if (snap.engraveBed != null) {
+    const ebc = document.getElementById('engrave-bed-chk');
+    if (ebc) { ebc.checked = !!snap.engraveBed; ebc.dispatchEvent(new Event('change', { bubbles: true })); }
+  }
   if (snap.noDownwardZ != null) {
     noDownwardZChk.checked = snap.noDownwardZ;
     noDownwardZChk.dispatchEvent(new Event('change', { bubbles: true }));
@@ -5475,7 +5710,12 @@ function applySettingsSnapshot(snap) {
  * (resetTextureSmoothing + defaultScale override) so a just-restored snapshot
  * isn't clobbered. Pass applyDefaults=true for fresh user-initiated picks.
  */
-function _selectPresetByName(name, applyDefaults = false) {
+function _selectPresetByName(name, applyDefaults = false, proc = null) {
+  if (proc && procGens[proc.kind]) {
+    _procWanted = proc.kind;
+    showMapTab(proc.kind);
+    return procGens[proc.kind].restore(proc);
+  }
   if (!name) return false;
   const idx = IMAGE_PRESETS.findIndex(p => p.name === name);
   if (idx < 0) return false;
@@ -5491,6 +5731,7 @@ let _autoSaveTimer = null;
 let _autoSavePaused = false;
 function _autoSaveSettings() {
   if (_autoSavePaused) return;
+  _scheduleWorkspaceState();
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(() => {
     try {
@@ -5498,6 +5739,147 @@ function _autoSaveSettings() {
       sessionStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(payload));
     } catch { /* quota exceeded or disabled — ignore */ }
   }, 300);
+}
+
+// ── Persistent workspace (IndexedDB) ─────────────────────────────────────────
+
+function _saveWorkspaceModelNow() {
+  if (!currentGeometry) return;
+  try {
+    // Original pose, like project files: the rotation rides along in the state.
+    saveWorkspaceModel(_tabs.active, currentStlName + '.stl', _geometryToBinarySTL(currentGeometry, true));
+    // Tabs are named after their model unless the user renamed them.
+    const tab = _tabs.list.find(x => x.id === _tabs.active);
+    if (tab && !tab.custom && tab.name !== currentStlName) {
+      tab.name = currentStlName;
+      saveTabs(_tabs);
+      projectTabs?.render();
+    }
+  } catch (err) { console.warn('[workspace] could not save model:', err); }
+}
+
+let _wsStateTimer = null;
+function _writeWorkspaceState() {
+  try {
+    return saveWorkspaceState(_tabs.active, {
+      settings: { version: PROJECT_VERSION, ...getSettingsSnapshot() },
+      poseRotation: currentPoseRot.toArray(),
+      mask: _collectCurrentMask(),
+    });
+  } catch (err) { console.warn('[workspace] could not save state:', err); }
+}
+function _scheduleWorkspaceState() {
+  if (_restoringWorkspace) return;
+  clearTimeout(_wsStateTimer);
+  _wsStateTimer = setTimeout(_writeWorkspaceState, 600);
+}
+
+// ── Project tabs ─────────────────────────────────────────────────────────────
+// Each tab is a whole workspace (model + rotation + settings + mask + map).
+// Switching saves the current one immediately, then replays the other.
+
+var projectTabs = null;   // var: a model save can fire before this line runs
+let _switchingTab = false;
+
+async function _openTab(id, { saveCurrent = true } = {}) {
+  if (_switchingTab || isExporting || isBaking) return;
+  _switchingTab = true;
+  projectTabs.setBusy(true);
+  try {
+    if (saveCurrent) { clearTimeout(_wsStateTimer); await _writeWorkspaceState(); }
+    _tabs.active = id;
+    await saveTabs(_tabs);
+    projectTabs.render();
+    const ws = await loadWorkspace(id);
+    // The session snapshot drives the map auto-select; point it at this tab.
+    try {
+      if (ws?.state?.settings) sessionStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(ws.state.settings));
+      else sessionStorage.removeItem(PROJECT_STORAGE_KEY);
+    } catch { /* ignore */ }
+    if (ws?.model || ws?.state) {
+      await _restoreWorkspace(ws);
+    } else {
+      // Fresh project: the default cube with default settings.
+      _restoringWorkspace = true;
+      try { loadDefaultCube(); resetSettingsToDefaults(); }
+      finally { _restoringWorkspace = false; }
+      _clearUndoStacks();
+      _writeWorkspaceState();
+    }
+  } finally {
+    _switchingTab = false;
+    projectTabs.setBusy(false);
+  }
+}
+
+async function _newTab() {
+  const n = _tabs.list.length + 1;
+  const id = createTabId();
+  _tabs.list.push({ id, name: t('tabs.defaultName', { n }) });
+  await _openTab(id);
+}
+
+async function _closeTab(id) {
+  const tab = _tabs.list.find(x => x.id === id);
+  if (!tab || _tabs.list.length < 2) return;
+  if (!confirm(t('tabs.confirmClose', { name: tab.name }))) return;
+  const idx = _tabs.list.indexOf(tab);
+  _tabs.list.splice(idx, 1);
+  await deleteWorkspace(id);
+  if (_tabs.active === id) {
+    const next = _tabs.list[Math.min(idx, _tabs.list.length - 1)];
+    await _openTab(next.id, { saveCurrent: false });
+  } else {
+    await saveTabs(_tabs);
+    projectTabs.render();
+  }
+}
+
+function _renameTab(id, name) {
+  const tab = _tabs.list.find(x => x.id === id);
+  if (!tab) return;
+  tab.name = name; tab.custom = true;
+  saveTabs(_tabs);
+  projectTabs.render();
+}
+
+projectTabs = initProjectTabs({
+  container: document.getElementById('project-tabs'),
+  getTabs: () => _tabs,
+  onSelect: (id) => _openTab(id),
+  onNew: _newTab,
+  onClose: _closeTab,
+  onRename: _renameTab,
+});
+projectTabs.render();
+
+/** Replay the saved workspace: model → rotation → settings → mask → map. */
+async function _restoreWorkspace(ws) {
+  if (!ws || !(ws.model?.bytes || ws.state)) return;
+  _restoringWorkspace = true;
+  _undoApplyDepth++;
+  try {
+    if (ws.model?.bytes) {
+      const file = new File([ws.model.bytes], ws.model.name || 'model.stl', { type: 'application/octet-stream' });
+      await handleModelFile(file);
+    } else {
+      loadDefaultCube();   // a project still on the default cube saves no model
+    }
+    const st = ws.state || {};
+    if (Array.isArray(st.poseRotation) && st.poseRotation.length === 4) {
+      const q = new THREE.Quaternion().fromArray(st.poseRotation).normalize();
+      if (Math.abs(q.w) < 1 - 1e-12) { _rotateGeometry(q); _rotateFinalize(); }
+    }
+    if (st.settings) applySettingsSnapshot(st.settings);
+    if (st.mask) _restoreMask(st.mask);
+    if (st.settings) _selectPresetByName(st.settings.activeMapName, false, _procStateOf(st.settings));
+  } catch (err) {
+    console.warn('[workspace] restore failed:', err);
+  } finally {
+    _undoApplyDepth--;
+    _restoringWorkspace = false;
+    _clearUndoStacks();
+  }
 }
 
 function _restoreSessionSettings() {
@@ -5539,7 +5921,7 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   mappingMode: 5, scaleU: 0.5, scaleV: 0.5, lockScale: true,
   offsetU: 0, offsetV: 0, rotation: 0,
   amplitude: 0.5, textureHeight: 0.5, invertDisplacement: false,
-  symmetricDisplacement: false, noDownwardZ: false, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
+  symmetricDisplacement: false, noDownwardZ: false, engraveBed: false, engraveContact: 0.5, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
   mappingBlend: 1, seamBandWidth: 0.5, capAngle: 20, boundaryFalloff: 0,
   boundaryFalloffCurve: 'ease',
   bottomAngleLimit: 5, topAngleLimit: 0,
@@ -5549,6 +5931,14 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   cylinderPanelMinimized: false,
   activeMapName: DEFAULT_PRESET_NAME,
 });
+
+function _syncReliefToggle() {
+  const inward = invertDisplacementCheckbox.checked;
+  for (const [id, on] of [['relief-emboss', !inward], ['relief-engrave', inward]]) {
+    const b = document.getElementById(id);
+    if (b) { b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); }
+  }
+}
 
 function resetSettingsToDefaults() {
   // Capture any pending edit, then push the pre-reset state so Ctrl+Z
@@ -5910,14 +6300,16 @@ async function _applyImportedTexture(unzipped, data) {
     activeMapEntry = await loadCustomTexture(texFile);
     activeMapEntry.isCustom = true;
     activeMapEntry.name = texName;
+    _procWanted = null;
+    showMapTab('library');
     _lastCustomMap = activeMapEntry;
     activeMapName.textContent = texName;
     document.querySelectorAll('.preset-swatch').forEach(s => s.classList.remove('active'));
     _showCustomMapThumb(activeMapEntry);
     customMapSwatch.classList.add('active');
     updatePreview();
-  } else if (data && data.activeMapName) {
-    _selectPresetByName(data.activeMapName);
+  } else if (data && (_procStateOf(data) || data.activeMapName)) {
+    _selectPresetByName(data.activeMapName, false, _procStateOf(data));
   }
 }
 
@@ -5990,6 +6382,7 @@ function _undoSnapshotsEqual(a, b) {
     if (a.settings[k] !== b.settings[k]) return false;
   }
   if ((a.settings.activeMapName || null) !== (b.settings.activeMapName || null)) return false;
+  if (JSON.stringify(a.settings.procedural || null) !== JSON.stringify(b.settings.procedural || null)) return false;
   const ma = a.mask, mb = b.mask;
   if (!ma && !mb) return true;
   if (!ma || !mb) return false;
@@ -6012,6 +6405,7 @@ function _commitUndoCapture() {
   _redoStack.length = 0;
   _baselineSnapshot = next;
   _updateUndoButtons();
+  _scheduleWorkspaceState();   // mask paints land here (they don't go through autosave)
 }
 
 function _scheduleUndoCapture() {
@@ -6041,8 +6435,8 @@ function _applyUndoSnapshot(snap) {
   try {
     applySettingsSnapshot(snap.settings);
     _restoreMask(snap.mask);
-    if (snap.settings && snap.settings.activeMapName) {
-      _selectPresetByName(snap.settings.activeMapName);
+    if (snap.settings && (snap.settings.activeMapName || snap.settings.procedural)) {
+      _selectPresetByName(snap.settings.activeMapName, false, _procStateOf(snap.settings));
     }
     updatePreview();
     _autoSaveSettings();
@@ -6117,3 +6511,4 @@ window.addEventListener('keydown', (e) => {
 _restoreSessionSettings();
 _baselineSnapshot = _captureUndoSnapshot();
 _updateUndoButtons();
+_restoreWorkspace(_savedWorkspace);
