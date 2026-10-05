@@ -834,7 +834,8 @@
     // cached copy), then start the app. Hosts without directory listings just skip it.
     const BUILD = '2026-10-05.4';
     try {
-      if (localStorage.getItem('bumpmesh-build') !== BUILD) {
+      const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+      if (local && localStorage.getItem('bumpmesh-build') !== BUILD) {
         const files = ['style.css'];
         for (const dir of ['js/', 'js/i18n/']) {
           try {
