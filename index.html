@@ -257,6 +257,72 @@
         <p style="margin:.4em 0 0;font-size:.75rem;opacity:.55;text-align:center;" data-i18n="ui.localProcessingNote">All processing runs locally in your browser â€” no data is uploaded.</p>
       </section>
 
+      <!-- Settings profiles: named snapshots of the texture + its settings (js/settingsProfiles.js) -->
+      <section class="panel-section" id="profiles-section">
+        <h2 data-i18n="profiles.title" data-i18n-title="profiles.tip" title="Save the current texture and all its settings under a name, and recall them on any model.">Profiles ⓘ</h2>
+        <div class="profile-row">
+          <select id="profile-select" aria-label="Saved profile">
+            <option value="" data-i18n-opt="profiles.none">— saved profiles —</option>
+          </select>
+          <button type="button" id="profile-apply" class="profile-btn" data-i18n="profiles.apply" disabled>Apply</button>
+          <button type="button" id="profile-delete" class="profile-btn profile-icon-btn" data-i18n-title="profiles.delete" title="Delete this profile" aria-label="Delete this profile" disabled>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
+          </button>
+        </div>
+        <div class="profile-row">
+          <input type="text" id="profile-name" maxlength="60" data-i18n-placeholder="profiles.namePlaceholder" placeholder="Name this look…" />
+          <button type="button" id="profile-save" class="profile-btn profile-save-btn" data-i18n="profiles.save" disabled>Save</button>
+        </div>
+        <div class="profile-row profile-row-minor">
+          <span id="profile-status" class="profile-status" aria-live="polite"></span>
+          <button type="button" id="profile-export" class="profile-link" data-i18n="profiles.export" data-i18n-title="profiles.exportTip" title="Download every profile as a file (to move them to another browser or computer)">Export</button>
+          <label class="profile-link" for="profile-import-input" role="button" tabindex="0" data-i18n="profiles.import" data-i18n-title="profiles.importTip" title="Add profiles from an exported file">Import</label>
+          <input type="file" id="profile-import-input" accept=".json,application/json" hidden />
+        </div>
+      </section>
+
+      <!-- Displacement -->
+      <section class="panel-section">
+        <h2 data-i18n="sections.displacement">Displacement</h2>
+        <div class="excl-seg relief-toggle" role="group" aria-label="Relief direction">
+          <button id="relief-emboss" type="button" class="excl-seg-btn active" aria-pressed="true" data-i18n-title="relief.embossTitle" title="Texture rises out of the surface."><span class="relief-ico">▲</span><span data-i18n="relief.emboss">Embossed</span></button>
+          <button id="relief-engrave" type="button" class="excl-seg-btn" aria-pressed="false" data-i18n-title="relief.engraveTitle" title="Texture is cut into the surface."><span class="relief-ico">▼</span><span data-i18n="relief.engrave">Engraved</span></button>
+        </div>
+        <div class="form-row slider-row">
+          <label for="amplitude" data-i18n="labels.textureHeight">Texture height (mm)</label>
+          <input type="range" id="amplitude" min="0" max="2" step="0.01" value="0.5" />
+          <input type="number" class="val" id="amplitude-val" value="0.5" min="0" max="100" step="0.01" data-wheel-decimals="2" />
+        </div>
+        <div class="form-row hidden">
+          <label class="checkbox-label" for="invert-displacement">
+            <input type="checkbox" id="invert-displacement" />
+            <span data-i18n="labels.invertDisplacement">Reverse direction (push in instead of out)</span>
+          </label>
+        </div>
+        <div id="amplitude-warning" class="amplitude-warning hidden" data-i18n="warnings.textureHeightOverlap">
+          âš  Texture height exceeds 10% of the smallest model dimension â€” geometry overlaps may occur in the exported STL.
+        </div>
+
+        <div class="form-row">
+          <label class="checkbox-label" for="symmetric-displacement"
+            data-i18n-title="tooltips.symmetricDisplacement"
+            title="When on, 50% grey = no displacement; white pushes out, black pushes in. Keeps part volume roughly constant.">
+            <input type="checkbox" id="symmetric-displacement" />
+            <span data-i18n="labels.symmetricDisplacement">Symmetric displacement â“˜</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="checkbox-label" for="displacement-preview"
+            data-i18n-title="tooltips.displacementPreview"
+            title="Subdivides the mesh and displaces vertices in real-time so you can judge the actual depth. GPU-intensive on complex models.">
+            <input type="checkbox" id="displacement-preview" />
+            <span data-i18n="labels.displacementPreview">3D Preview â“˜</span>
+          </label>
+          <span id="displacement-preview-spinner" class="mesh-diag-spinner hidden"
+            data-i18n-title="progress.subdividingPreview" title="Preparing preview…"></span>
+        </div>
+      </section>
+
       <!-- Displacement Map -->
       <section class="panel-section">
         <h2 data-i18n="sections.displacementMap">Displacement Map</h2>
@@ -375,48 +441,6 @@
               data-i18n-title="tooltips.cylinderReset"
               title="Reset to AABB center and AABB-derived radius.">Reset</button>
           </div>
-        </div>
-      </section>
-
-      <!-- Displacement -->
-      <section class="panel-section">
-        <h2 data-i18n="sections.displacement">Displacement</h2>
-        <div class="excl-seg relief-toggle" role="group" aria-label="Relief direction">
-          <button id="relief-emboss" type="button" class="excl-seg-btn active" aria-pressed="true" data-i18n-title="relief.embossTitle" title="Texture rises out of the surface."><span class="relief-ico">▲</span><span data-i18n="relief.emboss">Embossed</span></button>
-          <button id="relief-engrave" type="button" class="excl-seg-btn" aria-pressed="false" data-i18n-title="relief.engraveTitle" title="Texture is cut into the surface."><span class="relief-ico">▼</span><span data-i18n="relief.engrave">Engraved</span></button>
-        </div>
-        <div class="form-row slider-row">
-          <label for="amplitude" data-i18n="labels.textureHeight">Texture height (mm)</label>
-          <input type="range" id="amplitude" min="0" max="2" step="0.01" value="0.5" />
-          <input type="number" class="val" id="amplitude-val" value="0.5" min="0" max="100" step="0.01" data-wheel-decimals="2" />
-        </div>
-        <div class="form-row hidden">
-          <label class="checkbox-label" for="invert-displacement">
-            <input type="checkbox" id="invert-displacement" />
-            <span data-i18n="labels.invertDisplacement">Reverse direction (push in instead of out)</span>
-          </label>
-        </div>
-        <div id="amplitude-warning" class="amplitude-warning hidden" data-i18n="warnings.textureHeightOverlap">
-          âš  Texture height exceeds 10% of the smallest model dimension â€” geometry overlaps may occur in the exported STL.
-        </div>
-
-        <div class="form-row">
-          <label class="checkbox-label" for="symmetric-displacement"
-            data-i18n-title="tooltips.symmetricDisplacement"
-            title="When on, 50% grey = no displacement; white pushes out, black pushes in. Keeps part volume roughly constant.">
-            <input type="checkbox" id="symmetric-displacement" />
-            <span data-i18n="labels.symmetricDisplacement">Symmetric displacement â“˜</span>
-          </label>
-        </div>
-        <div class="form-row">
-          <label class="checkbox-label" for="displacement-preview"
-            data-i18n-title="tooltips.displacementPreview"
-            title="Subdivides the mesh and displaces vertices in real-time so you can judge the actual depth. GPU-intensive on complex models.">
-            <input type="checkbox" id="displacement-preview" />
-            <span data-i18n="labels.displacementPreview">3D Preview â“˜</span>
-          </label>
-          <span id="displacement-preview-spinner" class="mesh-diag-spinner hidden"
-            data-i18n-title="progress.subdividingPreview" title="Preparing preview…"></span>
         </div>
       </section>
 
@@ -925,7 +949,7 @@
     // browser can keep stale copies of modules and workers indefinitely. When this
     // stamp changes, re-fetch every script once (cache: 'reload' overwrites the
     // cached copy), then start the app. Hosts without directory listings just skip it.
-    const BUILD = '2026-10-06.1';
+    const BUILD = '2026-10-07.1';
     try {
       const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
       if (local && localStorage.getItem('bumpmesh-build') !== BUILD) {

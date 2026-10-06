@@ -27,6 +27,7 @@ import { initAutoMask } from './autoMaskUI.js';
 import { initPreviewAppearance } from './previewAppearance.js';
 import { loadTabs, saveTabs, createTabId, loadWorkspace, saveWorkspaceModel, saveWorkspaceState, deleteWorkspace } from './workspaceStore.js';
 import { initProjectTabs } from './projectTabs.js';
+import { initSettingsProfiles } from './settingsProfiles.js';
 import { subdivide }          from './subdivision.js';
 import { runExportPipeline }  from './exportPipeline.js';
 import { runPreviewPipeline, computeFaceNormals } from './previewPipeline.js';
@@ -1146,6 +1147,7 @@ function populateLanguageSelector() {
     _scheduleCylinderPanelRedraw();
     gallery.refreshText();
     _renderLayerStrip();
+    settingsProfiles?.refresh();
   });
 
   languageSelector.appendChild(select);
@@ -6270,6 +6272,47 @@ projectTabs = initProjectTabs({
   onRename: _renameTab,
 });
 projectTabs.render();
+
+// ── Settings profiles ────────────────────────────────────────────────────────
+// Named snapshots of the active texture + its settings (js/settingsProfiles.js).
+// Model-specific values (cylinder axis, panel state) and the paint stay out,
+// so a profile carries a look from one model to the next.
+const PROFILE_SKIP_KEYS = new Set(['cylinderCenterX', 'cylinderCenterY', 'cylinderRadius', 'cylinderPanelMinimized']);
+
+function _captureProfile() {
+  const snap = getSettingsSnapshot();
+  const out = { scaleUnit: 'mm' };
+  for (const k of PERSISTED_KEYS) if (!PROFILE_SKIP_KEYS.has(k)) out[k] = snap[k];
+  return {
+    settings: out,
+    activeMapName: snap.activeMapName || null,
+    activeCustomId: snap.activeCustomId || null,
+    procedural: snap.procedural || null,
+  };
+}
+
+async function _applyProfile(p) {
+  _flushUndoCapture();
+  const snap = { ...p.settings, scaleUnit: 'mm' };
+  applySettingsSnapshot(snap);
+  let ok = true;
+  if (p.procedural && procGens[p.procedural.kind]) ok = _selectPresetByName(p.activeMapName, false, p.procedural);
+  else if (p.activeCustomId && await selectCustomTexture(p.activeCustomId, false)) { /* applied */ }
+  else if (p.activeMapName) { showMapTab('library'); ok = _selectPresetByName(p.activeMapName); }
+  else ok = false;
+  // Picking a map can nudge scale/smoothing — land the saved values last.
+  applySettingsSnapshot(snap);
+  _syncReliefToggle();
+  _autoSaveSettings();
+  _scheduleUndoCapture();
+  return ok;
+}
+
+var settingsProfiles = initSettingsProfiles({
+  capture: _captureProfile,
+  apply: _applyProfile,
+  describe: () => activeMapEntry?.name || '',
+});
 
 /**
  * Replay a saved workspace: model → rotation → settings → layers, paint and

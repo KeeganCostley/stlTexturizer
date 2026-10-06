@@ -43,6 +43,15 @@ export const PROCEDURAL_KINDS = {
     defaults: DEFAULT_ROCK_PARAMS,
     selects: { shape: GRAIN_SHAPES },
     groups: [
+      // Edge finish first: it is the most-reached-for adjustment on every rock.
+      { id: 'surface', open: true, controls: [
+        { k: 'edgeSoftness' },
+        { k: 'roughJag' },
+        { k: 'roughness' },
+        { k: 'roughScale' },
+        { k: 'form' },
+        { k: 'weathering' },
+      ] },
       { id: 'grain', open: true, controls: [
         { k: 'shape', type: 'select' },
         { k: 'grainSize', readout: 'grain' },
@@ -95,14 +104,6 @@ export const PROCEDURAL_KINDS = {
         { k: 'veins', min: -100, max: 100 },
         { k: 'veinWidth' },
         { k: 'veinDensity' },
-      ] },
-      { id: 'surface', open: true, controls: [
-        { k: 'roughness' },
-        { k: 'roughScale' },
-        { k: 'roughJag' },
-        { k: 'edgeSoftness' },
-        { k: 'form' },
-        { k: 'weathering' },
       ] },
     ],
     readout(kind, p, tileMm) {
