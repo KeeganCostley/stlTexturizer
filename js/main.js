@@ -154,6 +154,11 @@ const settings = {
   // engraveContact = share of the face that stays on the bed.
   engraveBed: false,
   engraveContact: 0.5,
+  // Print steps: terrace up-facing relief into a few levels, each a whole
+  // number of print layers tall (displacement.js printStepHeight).
+  printSteps: false,
+  printStepCount: 4,
+  printLayerH: 0.2,
   smoothBottom: true,
   harvestFlatFaces: true,
   harvestTol: 0.005,
@@ -557,9 +562,38 @@ function _engraveThreshold() { return _engraveThrFor(getEffectiveMapEntry() || a
  * rock maps with very large grains cover more than one Scale tile
  * (entry.tileMul > 1), so the tile the mapper repeats is Scale × tileMul.
  */
+/**
+ * Print steps: plateau spacing in mm (0 = off) — the tallest visible layer's
+ * texture height split into printStepCount levels, rounded to whole print
+ * layers (never less than one).
+ */
+function _printStepMm() {
+  if (!settings.printSteps) return 0;
+  const h = Math.max(0.04, Number(settings.printLayerH) || 0.2);
+  let H = 0;
+  layers.forEach((L, i) => {
+    if (L.visible === false) return;
+    const a = i === activeLayer ? settings.amplitude : L.settings?.amplitude;
+    H = Math.max(H, Math.abs(a || 0));
+  });
+  if (!H) H = Math.abs(settings.amplitude || 0);
+  const n = Math.max(1, Math.round(settings.printStepCount || 4));
+  return Math.max(1, Math.round(H / n / h + 1e-6)) * h;
+}
+
+function _syncPrintStepsInfo() {
+  const info = document.getElementById('print-steps-info');
+  if (!info) return;
+  const step = _printStepMm();
+  const h = Math.max(0.04, Number(settings.printLayerH) || 0.2);
+  info.textContent = step > 0
+    ? t('printSteps.info', { step: step.toFixed(2), layers: Math.round(step / h), h: h.toFixed(2) })
+    : '';
+}
+
 function _mapSettings(extra = {}) {
   const mul = activeMapEntry?.tileMul ?? 1;
-  const base = { ...settings, bounds: currentBounds, engraveThr: _engraveThreshold(), ...extra };
+  const base = { ...settings, bounds: currentBounds, engraveThr: _engraveThreshold(), printStep: _printStepMm(), ...extra };
   if (mul === 1) return base;
   return { ...base, scaleU: settings.scaleU * mul, scaleV: settings.scaleV * mul };
 }
@@ -1868,6 +1902,27 @@ function wireEvents() {
       _falloffDirty = true;
       updatePreview();
     });
+  }
+  const printStepsChk = document.getElementById('print-steps-chk');
+  if (printStepsChk) {
+    const opts = document.getElementById('print-steps-opts');
+    printStepsChk.checked = !!settings.printSteps;
+    opts.classList.toggle('hidden', !settings.printSteps);
+    printStepsChk.addEventListener('change', () => {
+      settings.printSteps = printStepsChk.checked;
+      opts.classList.toggle('hidden', !settings.printSteps);
+      _syncPrintStepsInfo();
+      updatePreview();
+    });
+    linkSlider(document.getElementById('print-step-count'), document.getElementById('print-step-count-val'), v => {
+      settings.printStepCount = Math.round(v); _syncPrintStepsInfo(); return Math.round(v);
+    });
+    linkSlider(document.getElementById('print-layer-h'), document.getElementById('print-layer-h-val'), v => {
+      settings.printLayerH = v; _syncPrintStepsInfo(); return v.toFixed(2);
+    });
+    amplitudeSlider.addEventListener('input', _syncPrintStepsInfo);
+    amplitudeVal.addEventListener('change', _syncPrintStepsInfo);
+    _syncPrintStepsInfo();
   }
   noDownwardZChk.addEventListener('change', () => {
     settings.noDownwardZ = noDownwardZChk.checked;
@@ -4922,6 +4977,7 @@ function _materialSettings(preview) {
     layeredTint: preview.count > 1,
     engraveBed: settings.engraveBed,
     engraveContact: settings.engraveContact,
+    printStep: _printStepMm(),
   };
 }
 
@@ -5824,7 +5880,7 @@ const PERSISTED_KEYS = [
   'offsetU', 'offsetV', 'rotation',
   'amplitude', 'textureHeight', 'invertDisplacement',
   'invertTexture',
-  'symmetricDisplacement', 'noDownwardZ', 'engraveBed', 'engraveContact', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
+  'symmetricDisplacement', 'noDownwardZ', 'engraveBed', 'engraveContact', 'printSteps', 'printStepCount', 'printLayerH', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
   'mappingBlend', 'seamBandWidth', 'capAngle', 'boundaryFalloff', 'boundaryFalloffCurve',
   'bottomAngleLimit', 'topAngleLimit',
   'refineLength', 'maxTriangles',
@@ -6085,6 +6141,12 @@ function applySettingsSnapshot(snap) {
   if (snap.engraveBed != null) {
     const ebc = document.getElementById('engrave-bed-chk');
     if (ebc) { ebc.checked = !!snap.engraveBed; ebc.dispatchEvent(new Event('change', { bubbles: true })); }
+  }
+  setLinkedVal(document.getElementById('print-step-count-val'), snap.printStepCount);
+  setLinkedVal(document.getElementById('print-layer-h-val'),    snap.printLayerH);
+  if (snap.printSteps != null) {
+    const psc = document.getElementById('print-steps-chk');
+    if (psc) { psc.checked = !!snap.printSteps; psc.dispatchEvent(new Event('change', { bubbles: true })); }
   }
   if (snap.noDownwardZ != null) {
     noDownwardZChk.checked = snap.noDownwardZ;
@@ -6416,7 +6478,7 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   offsetU: 0, offsetV: 0, rotation: 0,
   amplitude: 0.5, textureHeight: 0.5, invertDisplacement: false,
   invertTexture: false,
-  symmetricDisplacement: false, noDownwardZ: false, engraveBed: false, engraveContact: 0.5, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
+  symmetricDisplacement: false, noDownwardZ: false, engraveBed: false, engraveContact: 0.5, printSteps: false, printStepCount: 4, printLayerH: 0.2, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
   mappingBlend: 1, seamBandWidth: 0.5, capAngle: 20, boundaryFalloff: 0,
   boundaryFalloffCurve: 'ease',
   bottomAngleLimit: 5, topAngleLimit: 0,

@@ -304,6 +304,27 @@
         </div>
 
         <div class="form-row">
+          <label class="checkbox-label" for="print-steps-chk"
+            data-i18n-title="printSteps.tip"
+            title="A slicer can only print upward-facing relief as whole layers, so gentle slopes on floors and tops come out as a contour map. This folds the texture on surfaces facing up into a few flat plateaus, each a whole number of layers tall, joined by steep edges that print cleanly. Walls are unchanged.">
+            <input type="checkbox" id="print-steps-chk" />
+            <span data-i18n="printSteps.label">Print steps on floors &amp; tops ⓘ</span>
+          </label>
+        </div>
+        <div id="print-steps-opts" class="print-steps-opts hidden">
+          <div class="form-row slider-row">
+            <label for="print-step-count" data-i18n="printSteps.count" data-i18n-title="printSteps.countTip" title="How many flat levels the texture is folded into. Fewer = bolder, cleaner plateaus.">Steps ⓘ</label>
+            <input type="range" id="print-step-count" min="2" max="10" step="1" value="4" />
+            <input type="number" class="val" id="print-step-count-val" value="4" min="1" max="20" step="1" />
+          </div>
+          <div class="form-row slider-row">
+            <label for="print-layer-h" data-i18n="printSteps.layerH" data-i18n-title="printSteps.layerHTip" title="Your slicer layer height. Every step is rounded to a whole number of these.">Layer (mm) ⓘ</label>
+            <input type="range" id="print-layer-h" min="0.04" max="0.4" step="0.01" value="0.2" />
+            <input type="number" class="val" id="print-layer-h-val" value="0.2" min="0.04" max="1" step="0.01" data-wheel-decimals="2" />
+          </div>
+          <p id="print-steps-info" class="advanced-blurb print-steps-info"></p>
+        </div>
+        <div class="form-row">
           <label class="checkbox-label" for="symmetric-displacement"
             data-i18n-title="tooltips.symmetricDisplacement"
             title="When on, 50% grey = no displacement; white pushes out, black pushes in. Keeps part volume roughly constant.">
@@ -949,7 +970,7 @@
     // browser can keep stale copies of modules and workers indefinitely. When this
     // stamp changes, re-fetch every script once (cache: 'reload' overwrites the
     // cached copy), then start the app. Hosts without directory listings just skip it.
-    const BUILD = '2026-10-07.1';
+    const BUILD = '2026-10-07.2';
     try {
       const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
       if (local && localStorage.getItem('bumpmesh-build') !== BUILD) {

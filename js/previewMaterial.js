@@ -67,6 +67,7 @@ const sharedGLSL = /* glsl */`
   uniform float     topAngleLimit;
   uniform int       noDownwardZ;
   uniform int       engraveBed;
+  uniform float     printStep;   // print-steps plateau spacing in mm (0 = off), see displacement.js
   uniform float     layerEngraveThr[MAX_LAYERS]; // engrave-bed contact grey per layer (percentile from main.js)
   uniform int       useDisplacement;
 
@@ -265,6 +266,14 @@ const sharedGLSL = /* glsl */`
 
   // Composite the layers' heights with per-layer weights w (mask × falloff ×
   // angle mask): later layers cover the ones below, or add to them.
+  // Print steps (displacement.js printStepWeight / printStepHeight).
+  float printStepWeight(float nz) { return smoothstep(0.5, 0.906, nz); }
+  float printStepHeight(float d, float step) {
+    float x = d / step;
+    float k = floor(x);
+    return (k + smoothstep(0.375, 0.625, x - k)) * step;
+  }
+
   float compositeHeight(vec3 pos, vec3 projN, vec3 blendN, vec4 w) {
     float H = 0.0;
     for (int l = 0; l < MAX_LAYERS; l++) {
@@ -328,6 +337,7 @@ const vertexShader = /* glsl */`
       // Displace along smooth normal so all copies of the same position
       // arrive at the same point (watertight, no cracks).
       vec3 sN = length(smoothNormal) > 1e-6 ? normalize(smoothNormal) : safeN;
+      if (printStep > 0.0) h = mix(h, printStepHeight(h, printStep), printStepWeight(sN.z));
       pos = position + sN * h;
       // Overhang protection: never move a vertex below its original Z.
       if (noDownwardZ == 1 && pos.z < position.z) pos.z = position.z;
@@ -659,6 +669,7 @@ export function updateMaterial(material, layers, settings) {
   u.boundaryFalloffCurve.value = FALLOFF_CURVE_INDEX[settings.boundaryFalloffCurve] ?? 0;
   u.layeredTint.value = settings.layeredTint ? 1 : 0;
   u.engraveBed.value  = settings.engraveBed ? 1 : 0;
+  u.printStep.value   = settings.printStep > 0 ? settings.printStep : 0;
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
@@ -698,6 +709,7 @@ function buildUniforms() {
     boundaryFalloffCurve: { value: 0 },
     layeredTint:          { value: 0 },
     engraveBed:           { value: 0 },
+    printStep:            { value: 0 },
     layerEngraveThr:      { value: new Float32Array(MAX_LAYERS).fill(0.5) },
     // Shared objects: every preview material follows setPreviewAppearance().
     baseColor:            APPEARANCE.baseColor,

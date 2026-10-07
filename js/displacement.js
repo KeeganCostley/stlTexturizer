@@ -90,6 +90,30 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
  * @param {function} [onProgress]
  * @returns {THREE.BufferGeometry}
  */
+/**
+ * Print steps: how strongly a surface with unit-normal Z `nz` is terraced.
+ * Flat tops (within ~25° of level) fully, fading out by 60° so walls keep
+ * their continuous relief.
+ */
+export function printStepWeight(nz) {
+  const t = Math.min(1, Math.max(0, (nz - 0.5) / (0.906 - 0.5)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Fold a displacement (mm) onto plateaus `step` apart. The riser between two
+ * plateaus spans the middle quarter of each step's range of heights, so it
+ * follows the texture's own contour lines (smoothly interpolated across a
+ * triangle) instead of zig-zagging along mesh edges.
+ */
+export function printStepHeight(d, step) {
+  const x = d / step;
+  const k = Math.floor(x);
+  const f = x - k;
+  const t = Math.min(1, Math.max(0, (f - 0.375) / 0.25));
+  return (k + t * t * (3 - 2 * t)) * step;
+}
+
 export function applyDisplacementLayers(geometry, layers, settings, bounds, onProgress) {
   const posAttr = geometry.attributes.position;
   const nrmAttr = geometry.attributes.normal;
@@ -660,6 +684,32 @@ export function applyDisplacementLayers(geometry, layers, settings, bounds, onPr
     layer._softMax = null; layer._hardPos = null;
     layer._zoneAreaX = layer._zoneAreaY = layer._zoneAreaZ = null;
     if (onProgress) onProgress(0.5 * (li + 1) / layers.length);
+  }
+
+  // ── Print steps: terrace the relief on upward-facing surfaces ─────────────
+  // A slicer can only render up-facing relief as whole layers, so a gently
+  // sloping texture comes out as a contour map of thin, wide steps. Folding
+  // the height into a few deliberate levels, each a whole number of layers
+  // tall, gives flat plateaus joined by steep risers that print like walls.
+  // Same rule as the preview shader (previewMaterial.js printStepHeight).
+  const printStep = settings.printStep > 0 ? settings.printStep : 0;
+  if (printStep > 0) {
+    for (let vid = 0; vid < uniqueCount; vid++) {
+      const w = printStepWeight(smoothNrmZ[vid]);
+      if (w > 0) acc[vid] += w * (printStepHeight(acc[vid], printStep) - acc[vid]);
+    }
+    if (creases) {
+      for (let s = 0; s < creases.count; s++) {
+        if (!creases.active[s]) continue;
+        for (let g = 0; g < creases.groups[s]; g++) {
+          const k = creases.start[s] + g;
+          const nx = creases.nrmX[k], ny = creases.nrmY[k], nz = creases.nrmZ[k];
+          const len = Math.hypot(nx, ny, nz) || 1;
+          const w = printStepWeight(nz / len);
+          if (w > 0) groupAcc[k] += w * (printStepHeight(groupAcc[k], printStep) - groupAcc[k]);
+        }
+      }
+    }
   }
 
   // ── Pass 3: displace every vertex copy by the same vector ─────────────────
