@@ -140,8 +140,17 @@ export function getCubicBlendWeights(normal, blend, seamBandWidth = 0.35) {
  * @param {{ min, max, center, size }} bounds           THREE.Vector3 fields
  * @returns {{ u:number, v:number }}                    tiled UV after scale+offset
  */
+// Single-tile maps (one symbol, settings.singleTile): the texture is placed
+// once, centred on the part, and never repeats — raw coordinates are measured
+// from the part centre (0.5 = centre), scaling happens about the tile centre,
+// and samples outside the tile clamp to its (empty) border. Set per computeUV
+// call; read by applyTransform / flipU below.
+let _single = false;
+const flipU = (u) => (_single ? 1 - u : -u);
+
 export function computeUV(pos, normal, mode, settings, bounds) {
-  const { min, size, center } = bounds;
+  const { size, center } = bounds;
+  _single = !!settings.singleTile;
   // Compensate for non-square textures: divide scale by aspect correction
   // so equal world-space distances produce equal physical texture distances.
   const aU = settings.textureAspectU ?? 1;
@@ -156,6 +165,9 @@ export function computeUV(pos, normal, mode, settings, bounds) {
   const cosR = Math.cos(rotRad);
   const sinR = Math.sin(rotRad);
   const md = Math.max(size.x, size.y, size.z, 1e-6);
+  const min = _single
+    ? { x: center.x - md / 2, y: center.y - md / 2, z: center.z - md / 2 }
+    : bounds.min;
 
   let u = 0, v = 0;
 
@@ -193,7 +205,7 @@ export function computeUV(pos, normal, mode, settings, bounds) {
       const blend = settings.mappingBlend ?? 0.0;
       const theta = Math.atan2(ry, rx);
       const uRaw = (theta / TWO_PI) + 0.5;
-      const vSide = (pos.z - min.z) / C;
+      const vSide = _single ? (pos.z - center.z) / C + 0.5 : (pos.z - min.z) / C;
 
       // Seam smoothing: cross-fade between left-side and right-side texture
       // continuations at the atan2 wrap. Both sides use smoothly varying UVs
@@ -286,11 +298,11 @@ export function computeUV(pos, normal, mode, settings, bounds) {
       // Flip U based on normal sign so opposite faces show correct (non-mirrored) text.
       // Derived from camera right = view_dir × up_dir for each face orientation (Z-up).
       let yzU = (pos.y - min.y) / md;
-      if (normal.x < 0) yzU = -yzU;
+      if (normal.x < 0) yzU = flipU(yzU);
       let xzU = (pos.x - min.x) / md;
-      if (normal.y > 0) xzU = -xzU;
+      if (normal.y > 0) xzU = flipU(xzU);
       let xyU = (pos.x - min.x) / md;
-      if (normal.z < 0) xyU = -xyU;
+      if (normal.z < 0) xyU = flipU(xyU);
       const tYZ = applyTransform(yzU, (pos.z - min.z) / md, scaleU, scaleV, offsetU, offsetV, cosR, sinR);
       const tXZ = applyTransform(xzU, (pos.z - min.z) / md, scaleU, scaleV, offsetU, offsetV, cosR, sinR);
       const tXY = applyTransform(xyU, (pos.y - min.y) / md, scaleU, scaleV, offsetU, offsetV, cosR, sinR);
@@ -326,11 +338,11 @@ export function computeUV(pos, normal, mode, settings, bounds) {
 
       // Flip U based on normal sign so opposite faces show correct (non-mirrored) text.
       let yzU = (pos.y - min.y) / md;
-      if (normal.x < 0) yzU = -yzU;
+      if (normal.x < 0) yzU = flipU(yzU);
       let xzU = (pos.x - min.x) / md;
-      if (normal.y > 0) xzU = -xzU;
+      if (normal.y > 0) xzU = flipU(xzU);
       let xyU = (pos.x - min.x) / md;
-      if (normal.z < 0) xyU = -xyU;
+      if (normal.z < 0) xyU = flipU(xyU);
       const uvXY = {
         u: xyU,
         v: (pos.y - min.y) / md,
@@ -363,16 +375,20 @@ export function computeUV(pos, normal, mode, settings, bounds) {
 }
 
 function applyTransform(u, v, scaleU, scaleV, offsetU, offsetV, cosR, sinR) {
-  let uu = u / scaleU + offsetU;
-  let vv = v / scaleV + offsetV;
+  let uu = _single ? (u - 0.5) / scaleU + 0.5 + offsetU : u / scaleU + offsetU;
+  let vv = _single ? (v - 0.5) / scaleV + 0.5 + offsetV : v / scaleV + offsetV;
   if (cosR !== 1 || sinR !== 0) {
     uu -= 0.5; vv -= 0.5;
     const ru = cosR * uu - sinR * vv;
     const rv = sinR * uu + cosR * vv;
     uu = ru + 0.5; vv = rv + 0.5;
   }
+  if (_single) return { triplanar: false, u: clampTile(uu), v: clampTile(vv) };
   return { triplanar: false, u: fract(uu), v: fract(vv) };
 }
+
+/** Single-tile sampling: stay on the tile, whose border is empty. */
+export function clampTile(x) { return x < 0.0005 ? 0.0005 : x > 0.9995 ? 0.9995 : x; }
 
 /** Fractional part, always positive (mirrors GLSL fract) */
 function fract(x) { return x - Math.floor(x); }

@@ -4,7 +4,7 @@
  */
 
 import { THREE } from './threeCompat.js';
-import { computeUV, getDominantCubicAxis, getCubicBlendWeights, scaleMmToRelative } from './mapping.js';
+import { computeUV, getDominantCubicAxis, getCubicBlendWeights, scaleMmToRelative, clampTile } from './mapping.js';
 import { QuantizedPointMap } from './meshIndex.js';
 
 // ── Sharp-crease handling (see _findCreases / _creaseMoves) ─────────────────
@@ -1063,21 +1063,28 @@ function _creaseMoves(cr, groupAcc, snX, snY, snZ) {
  *  sign of (fx, fy, fz) picks each projection's mirror side. */
 function _cubicGrey(data, w, h, pos, wX, wY, wZ, fx, fy, fz, bounds, md, relScale, settings, rotRad, aspectU, aspectV) {
   let grey = 0;
+  // Single-tile maps measure from the part centre (see mapping.js computeUV).
+  const single = !!settings.singleTile;
+  if (single) {
+    const c = bounds.center;
+    bounds = { ...bounds, min: { x: c.x - md / 2, y: c.y - md / 2, z: c.z - md / 2 } };
+  }
+  const flip = (u) => (single ? 1 - u : -u);
   if (wX > 0) { // X-dominant → YZ projection
     let rawU = (pos.y-bounds.min.y)/md;
-    if (fx < 0) rawU = -rawU;
+    if (fx < 0) rawU = flip(rawU);
     const uv = _cubicUV(rawU, (pos.z-bounds.min.z)/md, relScale, settings, rotRad, aspectU, aspectV);
     grey += sampleBilinear(data, w, h, uv.u, uv.v) * wX;
   }
   if (wY > 0) { // Y-dominant → XZ projection
     let rawU = (pos.x-bounds.min.x)/md;
-    if (fy > 0) rawU = -rawU;
+    if (fy > 0) rawU = flip(rawU);
     const uv = _cubicUV(rawU, (pos.z-bounds.min.z)/md, relScale, settings, rotRad, aspectU, aspectV);
     grey += sampleBilinear(data, w, h, uv.u, uv.v) * wY;
   }
   if (wZ > 0) { // Z-dominant → XY projection
     let rawU = (pos.x-bounds.min.x)/md;
-    if (fz < 0) rawU = -rawU;
+    if (fz < 0) rawU = flip(rawU);
     const uv = _cubicUV(rawU, (pos.y-bounds.min.y)/md, relScale, settings, rotRad, aspectU, aspectV);
     grey += sampleBilinear(data, w, h, uv.u, uv.v) * wZ;
   }
@@ -1273,13 +1280,16 @@ function sampleBilinear(data, w, h, u, v) {
  *  Mirrors the private applyTransform helper in mapping.js. `relScale` is the
  *  mm→relative conversion from scaleMmToRelative (constant per export). */
 function _cubicUV(rawU, rawV, relScale, settings, rotRad, aspectU, aspectV) {
-  let u = (rawU * aspectU) / relScale.u + settings.offsetU;
-  let v = (rawV * aspectV) / relScale.v + settings.offsetV;
+  const single = !!settings.singleTile;
+  const c0 = single ? 0.5 : 0;
+  let u = ((rawU - c0) * aspectU) / relScale.u + c0 + settings.offsetU;
+  let v = ((rawV - c0) * aspectV) / relScale.v + c0 + settings.offsetV;
   if (rotRad !== 0) {
     const c = Math.cos(rotRad), s = Math.sin(rotRad);
     u -= 0.5; v -= 0.5;
     const ru = c*u - s*v, rv = s*u + c*v;
     u = ru + 0.5; v = rv + 0.5;
   }
+  if (single) return { u: clampTile(u), v: clampTile(v) };
   return { u: u - Math.floor(u), v: v - Math.floor(v) };
 }

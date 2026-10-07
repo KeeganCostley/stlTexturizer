@@ -593,7 +593,8 @@ function _syncPrintStepsInfo() {
 
 function _mapSettings(extra = {}) {
   const mul = activeMapEntry?.tileMul ?? 1;
-  const base = { ...settings, bounds: currentBounds, engraveThr: _engraveThreshold(), printStep: _printStepMm(), ...extra };
+  const base = { ...settings, bounds: currentBounds, engraveThr: _engraveThreshold(), printStep: _printStepMm(),
+    singleTile: !!activeMapEntry?.singleTile, ...extra };
   if (mul === 1) return base;
   return { ...base, scaleU: settings.scaleU * mul, scaleV: settings.scaleV * mul };
 }
@@ -1415,6 +1416,7 @@ const MAP_TABS = {
   rock:    { tab: document.getElementById('map-tab-rock'),    pane: document.getElementById('rock-pane') },
   design:  { tab: document.getElementById('map-tab-design'),  pane: document.getElementById('design-pane') },
   water:   { tab: document.getElementById('map-tab-water'),   pane: document.getElementById('water-pane') },
+  symbol:  { tab: document.getElementById('map-tab-symbol'),  pane: document.getElementById('symbol-pane') },
 };
 
 function showMapTab(which) {
@@ -1460,7 +1462,7 @@ function _useProceduralMap(entry) {
   _autoSaveSettings();
 }
 
-for (const kind of ['rock', 'design', 'water']) {
+for (const kind of ['rock', 'design', 'water', 'symbol']) {
   const pane = MAP_TABS[kind].pane;
   procGens[kind] = initProceduralPanel({
     kind,
@@ -1471,6 +1473,7 @@ for (const kind of ['rock', 'design', 'water']) {
       offsetU: settings.offsetU || 0, offsetV: settings.offsetV || 0,
       rotation: settings.rotation || 0,
       viewMm: _scaleAnchorMm(),   // the strip spans the part's largest dimension
+      single: !!activeMapEntry?.singleTile,
     }),
     setTransform: _setTextureTransform,
     isInUse: (entry) => _mapEntryInUse(entry),
@@ -2997,6 +3000,7 @@ function _previewLayers() {
       textureAspectU: tmax / Math.max(tw, 1), textureAspectV: tmax / Math.max(th, 1),
       blendAdd: index > 0 && L.blendAdd,
       engraveThr: _engraveThrFor(entry),
+      singleTile: !!entry?.singleTile,
     });
   }
   return { list, activeIdx, count: slots.length };
@@ -3085,7 +3089,7 @@ function _pipelineInputs() {
       imageData: entry.imageData, imgWidth: entry.width, imgHeight: entry.height,
       settings: { ...settings, ...s,
         scaleU: s.scaleU * (entry.tileMul ?? 1), scaleV: s.scaleV * (entry.tileMul ?? 1),
-        engraveThr: _engraveThrFor(entry) },
+        engraveThr: _engraveThrFor(entry), singleTile: !!entry.singleTile },
       exclude, hardFaces: hardMasked,
       blendAdd: L !== layers[0] && L.blendAdd,
     });

@@ -365,11 +365,13 @@
           <button type="button" id="map-tab-rock" class="map-source-tab" role="tab" aria-selected="false" data-i18n="rock.tab">Rocks</button>
           <button type="button" id="map-tab-design" class="map-source-tab" role="tab" aria-selected="false" data-i18n="design.tab">Design</button>
           <button type="button" id="map-tab-water" class="map-source-tab" role="tab" aria-selected="false" data-i18n="water.tab">Water</button>
+          <button type="button" id="map-tab-symbol" class="map-source-tab" role="tab" aria-selected="false" data-i18n="symbol.tab">Symbols</button>
         </div>
 
         <div id="rock-pane" class="proc-pane hidden"></div>
         <div id="design-pane" class="proc-pane hidden"></div>
         <div id="water-pane" class="proc-pane hidden"></div>
+        <div id="symbol-pane" class="proc-pane hidden"></div>
 
         <div id="library-pane">
         <!-- Favourites grid (4 wide, grows by rows), filled by js/textureGallery.js -->
@@ -970,7 +972,7 @@
     // browser can keep stale copies of modules and workers indefinitely. When this
     // stamp changes, re-fetch every script once (cache: 'reload' overwrites the
     // cached copy), then start the app. Hosts without directory listings just skip it.
-    const BUILD = '2026-10-07.2';
+    const BUILD = '2026-10-07.3';
     try {
       const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
       if (local && localStorage.getItem('bumpmesh-build') !== BUILD) {

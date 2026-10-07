@@ -20,6 +20,8 @@ import { DEFAULT_DESIGN_PARAMS } from './designGenerator.js';
 import { DESIGN_TYPES, DEFAULT_DESIGN_TYPE, designTypeById } from './designPresets.js';
 import { DEFAULT_WATER_PARAMS } from './waterGenerator.js';
 import { WATER_TYPES, DEFAULT_WATER_TYPE, waterTypeById } from './waterPresets.js';
+import { DEFAULT_SYMBOL_PARAMS, LAYOUTS, PROFILES, FRAMES } from './symbolGenerator.js';
+import { SYMBOL_TYPES, DEFAULT_SYMBOL_TYPE, symbolTypeById } from './symbolPresets.js';
 
 const FAST_SIZE = 256;
 const THUMB_GEN = 96;
@@ -191,9 +193,41 @@ export const PROCEDURAL_KINDS = {
       return fmtMm(tileMm / Math.max(1, Math.round(p.scale)));
     },
   },
+  symbol: {
+    i18n: 'symbol',
+    types: SYMBOL_TYPES,
+    defaultType: DEFAULT_SYMBOL_TYPE,
+    typeById: symbolTypeById,
+    defaults: DEFAULT_SYMBOL_PARAMS,
+    selects: { layout: LAYOUTS, profile: PROFILES, frame: FRAMES },
+    compactGrid: true,
+    groups: [
+      { id: 'layout', open: true, controls: [
+        { k: 'layout', type: 'select' },
+        { k: 'size', readout: 'symbol' },
+        { k: 'count', min: 1, max: 16, step: 1, raw: true, readout: 'pitch', when: (p) => p.layout !== 'single' },
+        { k: 'scatter', when: (p) => p.layout !== 'single' },
+        { k: 'sizeVar', when: (p) => p.layout !== 'single' },
+        { k: 'rotJitter', when: (p) => p.layout !== 'single' },
+        { k: 'mix', when: (p) => p.layout !== 'single' },
+      ] },
+      { id: 'relief', open: true, controls: [
+        { k: 'profile', type: 'select' },
+        { k: 'bevel', when: (p) => p.profile !== 'outline' },
+        { k: 'outline', when: (p) => p.profile === 'outline' },
+        { k: 'frame', type: 'select' },
+        { k: 'softness' },
+      ] },
+    ],
+    readout(kind, p, tileMm) {
+      if (p.layout === 'single') return fmtMm(tileMm * (0.06 + 0.88 * p.size));
+      const cell = tileMm / Math.max(1, Math.round(p.count));
+      return kind === 'pitch' ? fmtMm(cell) : fmtMm(cell * (0.05 + 0.93 * p.size));
+    },
+  },
 };
 
-const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water' };
+const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water', symbol: 'Symbol' };
 
 // ── Worker pool ──────────────────────────────────────────────────────────────
 // Shared by every panel. Big maps are split into row bands across all cores
@@ -310,9 +344,12 @@ function shadeTransformed(ctx, px, size, outW, outH, xf) {
   const mmPx = xf.viewMm / outW;
   const iu = 1 / xf.scaleU, iv = 1 / xf.scaleV;
   const rot = (xf.rotation || 0) * Math.PI / 180, c = Math.cos(rot), sn = Math.sin(rot);
+  // Single symbol: centred on the part (strip centre), outside its tile = empty.
+  const cx = xf.single ? xf.viewMm / 2 : 0, cy = xf.single ? (outH * mmPx) / 2 : 0;
   const H = (X, Y) => {
-    let u = X * iu + xf.offsetU - 0.5, v = Y * iv + xf.offsetV - 0.5;
+    let u = (X - cx) * iu + xf.offsetU - (xf.single ? 0 : 0.5), v = (Y - cy) * iv + xf.offsetV - (xf.single ? 0 : 0.5);
     const ru = c * u - sn * v + 0.5, rv = sn * u + c * v + 0.5;
+    if (xf.single && (ru < 0 || ru >= 1 || rv < 0 || rv >= 1)) return 0;
     const tx = Math.floor((ru - Math.floor(ru)) * size) % size;
     const ty = Math.floor((1 - (rv - Math.floor(rv))) * size) % size;   // textures are flipY'd
     return px[(ty * size + tx) * 4] / 255;
@@ -419,6 +456,7 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
     return {
       name, fullCanvas: canvas, texture, imageData, width: size, height: size,
       isProcedural: true, proceduralKind: kind, rev: ++rev, tileMul: tileMulOf(job.params),
+      singleTile: kind === 'symbol' && job.params.layout === 'single',
       procState: { kind, type: job.type, params: { ...job.params }, resolution: job.res },
     };
   }
@@ -439,7 +477,7 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
   container.innerHTML = '';
 
   // Type grid
-  const grid = el('div', { class: 'preset-grid proc-grid' });
+  const grid = el('div', { class: 'preset-grid proc-grid' + (cfg.compactGrid ? ' proc-grid-compact' : '') });
   const swatches = new Map();
   for (const rt of cfg.types) {
     const c = el('canvas'); c.width = c.height = THUMB;
@@ -514,9 +552,20 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
         o.setAttribute('data-i18n-opt', `${P}.${key}.${s}`);
         sel.appendChild(o);
       }
-      sel.addEventListener('change', () => { state.params[key] = sel.value; schedule(); });
+      sel.addEventListener('change', () => {
+        const prev = state.params[key];
+        state.params[key] = sel.value;
+        // Single ↔ pattern: keep each symbol about the same size on the part
+        // (a single symbol fills one tile; a pattern puts `count` per tile row).
+        if (key === 'layout' && getTransform && setTransform && (prev === 'single') !== (sel.value === 'single')) {
+          const n = Math.max(1, Math.round(state.params.count || 1));
+          const s = getTransform().scaleU;
+          if (s > 0) setTransform({ scaleU: sel.value === 'single' ? s / n : s * n, offsetU: 0, offsetV: 0 });
+        }
+        syncControls(); schedule();
+      });
       const row = el('div', { class: 'form-row' }, label, sel);
-      controls.set(key, { row, labelText, sync: () => { sel.value = state.params[key]; } });
+      controls.set(key, { row, labelText, when: c.when, sync: () => { sel.value = state.params[key]; } });
       return row;
     }
 
@@ -551,7 +600,7 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
       min = r ? r[0] : (c.min ?? 0); max = r ? r[1] : (c.max ?? 100);
       range.min = num.min = min; range.max = num.max = max;
     };
-    controls.set(key, { row, labelText, setRange, sync: () => { const v = toUi(state.params[key]); range.value = v; num.value = v; } });
+    controls.set(key, { row, labelText, setRange, when: c.when, sync: () => { const v = toUi(state.params[key]); range.value = v; num.value = v; } });
     return row;
   }
 
@@ -606,7 +655,8 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
   let rafId = 0;
   const redrawSoon = () => { if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; drawPreview(); }); };
   if (getTransform && setTransform) {
-    const wrapOff = (o) => o - Math.round(o);          // offsets are periodic in whole tiles
+    // Offsets are periodic in whole tiles — except for a single symbol, which can travel anywhere.
+    const wrapOff = (o) => (getTransform().single ? o : o - Math.round(o));
     const wrapDeg = (r) => ((r % 360) + 360) % 360;
     const mmPerCss = () => getTransform().viewMm / (preview.clientWidth || 320);
     let drag = null;
@@ -664,7 +714,8 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
 
   function syncControls() {
     const type = cfg.typeById(state.type);
-    const visible = (key) => !(type && type.uses && !type.uses.includes(key));
+    const visible = (key) => !(type && type.uses && !type.uses.includes(key))
+      && !(controls.get(key)?.when && !controls.get(key).when(state.params));
     for (const [key, c] of controls) {
       if (c.setRange) c.setRange(type && type.ranges && type.ranges[key]);
       c.sync();

@@ -2913,3 +2913,7 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
   text-underline-offset: 2px;
 }
 .profile-link:hover { opacity: 1; color: var(--accent); }
+
+/* Symbols: many small swatches */
+.proc-grid.proc-grid-compact { grid-template-columns: repeat(6, 1fr); max-height: 300px; overflow-y: auto; padding-right: 2px; }
+.proc-grid.proc-grid-compact .proc-label { font-size: 9px; }

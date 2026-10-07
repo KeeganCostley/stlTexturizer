@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-// Off-main-thread procedural heightmap generation (rocks, design patterns, water).
+// Off-main-thread procedural heightmap generation (rocks, design patterns, water, symbols).
 //   op 'full'    whole map in this worker → RGBA
 //   op 'rows'    per-pixel stage for rows [y0, y1) → struct / grit slices
 //   op 'finish'  whole-image stage over assembled slices → RGBA
@@ -12,9 +12,10 @@ import { heightsToRGBA } from './proceduralCore.js';
 import { rockRows, rockFinish } from './rockGenerator.js';
 import { designRows, designFinish } from './designGenerator.js';
 import { waterRows, waterFinish } from './waterGenerator.js';
+import { symbolRows, symbolFinish } from './symbolGenerator.js';
 
-const ROWS   = { rock: rockRows,   design: designRows,   water: waterRows };
-const FINISH = { rock: rockFinish, design: designFinish, water: waterFinish };
+const ROWS   = { rock: rockRows,   design: designRows,   water: waterRows,   symbol: symbolRows };
+const FINISH = { rock: rockFinish, design: designFinish, water: waterFinish, symbol: symbolFinish };
 
 self.onmessage = (e) => {
   const { op = 'full', id, kind, params, size } = e.data;

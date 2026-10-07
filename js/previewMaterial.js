@@ -60,6 +60,7 @@ const sharedGLSL = /* glsl */`
   uniform int       layerSymmetric[MAX_LAYERS];
   uniform vec2      layerAspect[MAX_LAYERS];
   uniform int       layerAdd[MAX_LAYERS];
+  uniform int       layerSingle[MAX_LAYERS];   // single-tile map: one copy centred on the part (mapping.js computeUV)
   uniform vec3      boundsMin;
   uniform vec3      boundsSize;
   uniform vec3      boundsCenter;
@@ -119,11 +120,14 @@ const sharedGLSL = /* glsl */`
 
   // Sample layer l after applying scale + tiling (aspect-corrected)
   float sampleMap(int l, vec2 rawUV) {
-    vec2 uv = (rawUV * layerAspect[l]) / layerScale[l] + layerOffset[l];
+    bool single = layerSingle[l] == 1;
+    vec2 c0 = single ? vec2(0.5) : vec2(0.0);
+    vec2 uv = ((rawUV - c0) * layerAspect[l]) / layerScale[l] + c0 + layerOffset[l];
     float c = cos(layerRot[l]); float s = sin(layerRot[l]);
     uv -= 0.5;
     uv  = vec2(c * uv.x - s * uv.y, s * uv.x + c * uv.y);
     uv += 0.5;
+    if (single) uv = clamp(uv, 0.0005, 0.9995);
     float h = 0.0;
     if      (l == 0) h = texture2D(map0, uv).r;
     else if (l == 1) h = texture2D(map1, uv).r;
@@ -142,15 +146,18 @@ const sharedGLSL = /* glsl */`
     vec3 rel = pos - boundsCenter;
     float maxDim = max(boundsSize.x, max(boundsSize.y, boundsSize.z));
     float md = max(maxDim, 1e-4);
+    bool single = layerSingle[l] == 1;
+    vec3 bMin = single ? boundsCenter - vec3(0.5 * md) : boundsMin;
+    float flipK = single ? 1.0 : 0.0;   // flipped U: -u (tiled) or 1 - u (single)
 
     if (mappingMode == 0) {
-      return sampleMap(l, vec2((pos.x - boundsMin.x) / md, (pos.y - boundsMin.y) / md));
+      return sampleMap(l, vec2((pos.x - bMin.x) / md, (pos.y - bMin.y) / md));
 
     } else if (mappingMode == 1) {
-      return sampleMap(l, vec2((pos.x - boundsMin.x) / md, (pos.z - boundsMin.z) / md));
+      return sampleMap(l, vec2((pos.x - bMin.x) / md, (pos.z - bMin.z) / md));
 
     } else if (mappingMode == 2) {
-      return sampleMap(l, vec2((pos.y - boundsMin.y) / md, (pos.z - boundsMin.z) / md));
+      return sampleMap(l, vec2((pos.y - bMin.y) / md, (pos.z - bMin.z) / md));
 
     } else if (mappingMode == 3) {
       // Cylinder axis is +Z. Center XY and radius are user-controllable so
@@ -159,7 +166,7 @@ const sharedGLSL = /* glsl */`
       float r = max(layerCylRadius[l], 1e-4);
       float C = TWO_PI * r;
       float u_cyl = atan(cylRel2.y, cylRel2.x) / TWO_PI + 0.5;
-      float v_cyl = (pos.z - boundsMin.z) / C;
+      float v_cyl = single ? (pos.z - boundsCenter.z) / C + 0.5 : (pos.z - bMin.z) / C;
 
       // Seam smoothing: cross-fade between left-side and right-side texture
       // continuations at the atan2 wrap point. Each side samples the texture
@@ -207,28 +214,28 @@ const sharedGLSL = /* glsl */`
       blend = pow(blend, vec3(4.0));
       blend /= dot(blend, vec3(1.0)) + 1e-4;
       // Flip U based on normal sign so opposite faces show correct (non-mirrored) text.
-      float yzU = (pos.y - boundsMin.y) / md;
-      if (projN.x < 0.0) yzU = -yzU;
-      float xzU = (pos.x - boundsMin.x) / md;
-      if (projN.y > 0.0) xzU = -xzU;
-      float xyU = (pos.x - boundsMin.x) / md;
-      if (projN.z < 0.0) xyU = -xyU;
-      float hXY = sampleMap(l, vec2(xyU, (pos.y - boundsMin.y) / md));
-      float hXZ = sampleMap(l, vec2(xzU, (pos.z - boundsMin.z) / md));
-      float hYZ = sampleMap(l, vec2(yzU, (pos.z - boundsMin.z) / md));
+      float yzU = (pos.y - bMin.y) / md;
+      if (projN.x < 0.0) yzU = flipK - yzU;
+      float xzU = (pos.x - bMin.x) / md;
+      if (projN.y > 0.0) xzU = flipK - xzU;
+      float xyU = (pos.x - bMin.x) / md;
+      if (projN.z < 0.0) xyU = flipK - xyU;
+      float hXY = sampleMap(l, vec2(xyU, (pos.y - bMin.y) / md));
+      float hXZ = sampleMap(l, vec2(xzU, (pos.z - bMin.z) / md));
+      float hYZ = sampleMap(l, vec2(yzU, (pos.z - bMin.z) / md));
       return hXY * blend.z + hXZ * blend.y + hYZ * blend.x;
 
     } else {
       // Flip U based on normal sign so opposite faces show correct (non-mirrored) text.
-      float yzU = (pos.y - boundsMin.y) / md;
-      if (projN.x < 0.0) yzU = -yzU;
-      float xzU = (pos.x - boundsMin.x) / md;
-      if (projN.y > 0.0) xzU = -xzU;
-      float xyU = (pos.x - boundsMin.x) / md;
-      if (projN.z < 0.0) xyU = -xyU;
-      float hYZ = sampleMap(l, vec2(yzU, (pos.z - boundsMin.z) / md));
-      float hXZ = sampleMap(l, vec2(xzU, (pos.z - boundsMin.z) / md));
-      float hXY = sampleMap(l, vec2(xyU, (pos.y - boundsMin.y) / md));
+      float yzU = (pos.y - bMin.y) / md;
+      if (projN.x < 0.0) yzU = flipK - yzU;
+      float xzU = (pos.x - bMin.x) / md;
+      if (projN.y > 0.0) xzU = flipK - xzU;
+      float xyU = (pos.x - bMin.x) / md;
+      if (projN.z < 0.0) xyU = flipK - xyU;
+      float hYZ = sampleMap(l, vec2(yzU, (pos.z - bMin.z) / md));
+      float hXZ = sampleMap(l, vec2(xzU, (pos.z - bMin.z) / md));
+      float hXY = sampleMap(l, vec2(xyU, (pos.y - bMin.y) / md));
       vec3 bN = blendN;
       vec3 absFaceN = abs(projN);
       float facePrimary = max(absFaceN.x, max(absFaceN.y, absFaceN.z));
@@ -656,6 +663,7 @@ export function updateMaterial(material, layers, settings) {
     u.layerAspect.value[l * 2]     = L ? (L.textureAspectU ?? 1) : 1;
     u.layerAspect.value[l * 2 + 1] = L ? (L.textureAspectV ?? 1) : 1;
     u.layerAdd.value[l]        = L && L.blendAdd ? 1 : 0;
+    u.layerSingle.value[l]     = L && L.singleTile ? 1 : 0;
     u.layerEngraveThr.value[l] = L ? (L.engraveThr ?? settings.engraveThr ?? (1 - (settings.engraveContact ?? 0.5))) : 0.5;
   }
   u.boundsMin.value.copy(b.min);
@@ -695,6 +703,7 @@ function buildUniforms() {
     layerSymmetric: { value: new Int32Array(MAX_LAYERS) },
     layerAspect:    { value: new Float32Array(MAX_LAYERS * 2) },
     layerAdd:       { value: new Int32Array(MAX_LAYERS) },
+    layerSingle:    { value: new Int32Array(MAX_LAYERS) },
     boundsMin:        { value: new THREE.Vector3() },
     boundsSize:       { value: new THREE.Vector3(1, 1, 1) },
     boundsCenter:     { value: new THREE.Vector3() },
