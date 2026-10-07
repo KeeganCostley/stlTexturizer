@@ -1417,6 +1417,7 @@ const MAP_TABS = {
   design:  { tab: document.getElementById('map-tab-design'),  pane: document.getElementById('design-pane') },
   water:   { tab: document.getElementById('map-tab-water'),   pane: document.getElementById('water-pane') },
   symbol:  { tab: document.getElementById('map-tab-symbol'),  pane: document.getElementById('symbol-pane') },
+  tech:    { tab: document.getElementById('map-tab-tech'),    pane: document.getElementById('tech-pane') },
 };
 
 function showMapTab(which) {
@@ -1462,7 +1463,7 @@ function _useProceduralMap(entry) {
   _autoSaveSettings();
 }
 
-for (const kind of ['rock', 'design', 'water', 'symbol']) {
+for (const kind of ['rock', 'design', 'water', 'tech', 'symbol']) {
   const pane = MAP_TABS[kind].pane;
   procGens[kind] = initProceduralPanel({
     kind,

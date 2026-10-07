@@ -22,6 +22,8 @@ import { DEFAULT_WATER_PARAMS } from './waterGenerator.js';
 import { WATER_TYPES, DEFAULT_WATER_TYPE, waterTypeById } from './waterPresets.js';
 import { DEFAULT_SYMBOL_PARAMS, LAYOUTS, PROFILES, FRAMES } from './symbolGenerator.js';
 import { SYMBOL_TYPES, DEFAULT_SYMBOL_TYPE, symbolTypeById } from './symbolPresets.js';
+import { DEFAULT_TECH_PARAMS, TECH_SHAPES } from './techGenerator.js';
+import { TECH_TYPES, DEFAULT_TECH_TYPE, techTypeById } from './techPresets.js';
 
 const FAST_SIZE = 256;
 const THUMB_GEN = 96;
@@ -193,6 +195,31 @@ export const PROCEDURAL_KINDS = {
       return fmtMm(tileMm / Math.max(1, Math.round(p.scale)));
     },
   },
+  tech: {
+    i18n: 'tech',
+    types: TECH_TYPES,
+    defaultType: DEFAULT_TECH_TYPE,
+    typeById: techTypeById,
+    defaults: DEFAULT_TECH_PARAMS,
+    selects: { shape: TECH_SHAPES },
+    groups: [
+      { id: 'form', open: true, controls: [
+        { k: 'scale', min: 1, max: 80, step: 1, raw: true, readout: 'pitch' },
+        { k: 'shape', type: 'select' },
+        { k: 'width' },
+        { k: 'density' },
+        { k: 'detail' },
+      ] },
+      { id: 'finish', open: true, controls: [
+        { k: 'bevel' },
+        { k: 'variation' },
+        { k: 'softness' },
+      ] },
+    ],
+    readout(kind, p, tileMm) {
+      return fmtMm(tileMm / Math.max(1, Math.round(p.scale)));
+    },
+  },
   symbol: {
     i18n: 'symbol',
     types: SYMBOL_TYPES,
@@ -227,7 +254,7 @@ export const PROCEDURAL_KINDS = {
   },
 };
 
-const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water', symbol: 'Symbol' };
+const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water', symbol: 'Symbol', tech: 'Tech' };
 
 // ── Worker pool ──────────────────────────────────────────────────────────────
 // Shared by every panel. Big maps are split into row bands across all cores
