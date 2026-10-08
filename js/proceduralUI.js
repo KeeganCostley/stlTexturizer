@@ -24,6 +24,8 @@ import { DEFAULT_SYMBOL_PARAMS, LAYOUTS, PROFILES, FRAMES } from './symbolGenera
 import { SYMBOL_TYPES, DEFAULT_SYMBOL_TYPE, symbolTypeById } from './symbolPresets.js';
 import { DEFAULT_TECH_PARAMS, TECH_SHAPES } from './techGenerator.js';
 import { TECH_TYPES, DEFAULT_TECH_TYPE, techTypeById } from './techPresets.js';
+import { DEFAULT_BOTANIC_PARAMS, BOTANIC_LAYOUTS } from './botanicGenerator.js';
+import { BOTANIC_TYPES, DEFAULT_BOTANIC_TYPE, botanicTypeById } from './botanicPresets.js';
 
 const FAST_SIZE = 256;
 const THUMB_GEN = 96;
@@ -205,6 +207,7 @@ export const PROCEDURAL_KINDS = {
     groups: [
       { id: 'form', open: true, controls: [
         { k: 'scale', min: 1, max: 80, step: 1, raw: true, readout: 'pitch' },
+        { k: 'count', min: 1, max: 12, step: 1, raw: true },
         { k: 'shape', type: 'select' },
         { k: 'width' },
         { k: 'density' },
@@ -218,6 +221,37 @@ export const PROCEDURAL_KINDS = {
     ],
     readout(kind, p, tileMm) {
       return fmtMm(tileMm / Math.max(1, Math.round(p.scale)));
+    },
+  },
+  botanic: {
+    i18n: 'botanic',
+    types: BOTANIC_TYPES,
+    defaultType: DEFAULT_BOTANIC_TYPE,
+    typeById: botanicTypeById,
+    defaults: DEFAULT_BOTANIC_PARAMS,
+    selects: { layout: BOTANIC_LAYOUTS },
+    groups: [
+      { id: 'form', open: true, controls: [
+        { k: 'layout', type: 'select' },
+        { k: 'count', min: 1, max: 12, step: 1, raw: true, readout: 'pitch', when: (p) => p.layout !== 'single' },
+        { k: 'size' },
+        { k: 'waviness' },
+        { k: 'variation' },
+      ] },
+      { id: 'growth', open: true, controls: [
+        { k: 'leaves' },
+        { k: 'flowers' },
+        { k: 'thorns' },
+        { k: 'width' },
+      ] },
+      { id: 'detail', open: true, controls: [
+        { k: 'petals' },
+        { k: 'veins' },
+        { k: 'softness' },
+      ] },
+    ],
+    readout(kind, p, tileMm) {
+      return fmtMm(tileMm / Math.max(1, Math.round(p.count)));
     },
   },
   symbol: {
@@ -254,7 +288,7 @@ export const PROCEDURAL_KINDS = {
   },
 };
 
-const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water', symbol: 'Symbol', tech: 'Tech' };
+const MAP_PREFIX = { rock: 'Rock', design: 'Design', water: 'Water', symbol: 'Symbol', tech: 'Tech', botanic: 'Botanical' };
 
 // ── Worker pool ──────────────────────────────────────────────────────────────
 // Shared by every panel. Big maps are split into row bands across all cores
@@ -483,7 +517,7 @@ export function initProceduralPanel({ kind, container, getTileMm, onMap, onTypeP
     return {
       name, fullCanvas: canvas, texture, imageData, width: size, height: size,
       isProcedural: true, proceduralKind: kind, rev: ++rev, tileMul: tileMulOf(job.params),
-      singleTile: kind === 'symbol' && job.params.layout === 'single',
+      singleTile: (kind === 'symbol' || kind === 'botanic') && job.params.layout === 'single',
       procState: { kind, type: job.type, params: { ...job.params }, resolution: job.res },
     };
   }

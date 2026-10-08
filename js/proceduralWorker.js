@@ -14,9 +14,10 @@ import { designRows, designFinish } from './designGenerator.js';
 import { waterRows, waterFinish } from './waterGenerator.js';
 import { symbolRows, symbolFinish } from './symbolGenerator.js';
 import { techRows, techFinish } from './techGenerator.js';
+import { botanicRows, botanicFinish } from './botanicGenerator.js';
 
-const ROWS   = { rock: rockRows,   design: designRows,   water: waterRows,   symbol: symbolRows,   tech: techRows };
-const FINISH = { rock: rockFinish, design: designFinish, water: waterFinish, symbol: symbolFinish, tech: techFinish };
+const ROWS   = { rock: rockRows,   design: designRows,   water: waterRows,   symbol: symbolRows,   tech: techRows,   botanic: botanicRows };
+const FINISH = { rock: rockFinish, design: designFinish, water: waterFinish, symbol: symbolFinish, tech: techFinish, botanic: botanicFinish };
 
 self.onmessage = (e) => {
   const { op = 'full', id, kind, params, size } = e.data;

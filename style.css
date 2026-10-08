@@ -2646,7 +2646,10 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
 }
 /* ── Map source tabs + rock generator ───────────────────────────────── */
 .map-source-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--border);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
@@ -2664,7 +2667,7 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.map-source-tab + .map-source-tab { border-left: 1px solid var(--border); }
+.map-source-tab:last-child { grid-column: span 1; }
 .map-source-tab:hover { color: var(--text); }
 .map-source-tab.active { background: var(--accent); color: #fff; }
 

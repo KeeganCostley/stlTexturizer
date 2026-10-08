@@ -25,6 +25,7 @@ export const DEFAULT_TECH_PARAMS = Object.freeze({
   detail: 0.5,       // secondary feature (ripples, pins, rings …)
   variation: 0.25,   // irregularity
   shape: 'round',
+  count: 3,         // chains / wires per tile
   softness: 0.02,
   seed: 1,
 });
@@ -52,6 +53,158 @@ function shapeDist(shape, x, y) {
 }
 
 // ── Analytic patterns: h(C, p, u, v) → 0..1 ─────────────────────────────────
+
+const TAU_ = Math.PI * 2;
+
+// ── Chains & wire ────────────────────────────────────────────────────────────
+// Lengths are in link-pitch units (centre-to-centre of consecutive links = 1).
+
+/**
+ * One chain link seen from above, in its own frame (x along the chain).
+ * flat: lying on the surface (an oval ring with a hole); otherwise standing
+ * on edge (a bar whose top follows the link's rounded outline), threading
+ * the holes of its flat neighbours. Returns the top height, 0 if missed.
+ */
+function linkTop(x, y, flat, rw, rC, a, stud) {
+  const ax = Math.abs(x), ay = Math.abs(y);
+  if (flat) {
+    const q = ax > a ? Math.hypot(ax - a, ay) : ay;
+    const sd = Math.abs(q - rC);
+    let h = sd < rw ? rw + Math.sqrt(rw * rw - sd * sd) : 0;
+    if (stud && ax < rw * 0.75 && ay < rC) h = Math.max(h, rw + Math.sqrt(Math.max(0, rw * rw * 0.56 - ax * ax)));
+    return h;
+  }
+  if (ay >= rw) return 0;
+  const ex = ax - a;
+  const zc = ex <= 0 ? rC : ex < rC ? Math.sqrt(rC * rC - ex * ex) : 0;
+  const tip = Math.max(0, ex - rC);
+  const s2 = rw * rw - ay * ay - tip * tip;
+  return s2 > 0 ? rw + zc + Math.sqrt(s2) : 0;
+}
+
+/** Chains running along u: classic / stud-link / curb / hanging. */
+function chainField(C, p, u, v, style) {
+  const N = even(C.N);
+  const rw = (0.1 + 0.085 * p.width) * (style === 'stud' ? 1.15 : 1);
+  const rC = 0.4 + rw * 0.35, a = style === 'curb' ? 0.18 : 0.3;
+  const linkW = rC + rw;                                      // half-width of a link
+  const M = Math.max(1, Math.min(Math.round(p.count), Math.floor(N / (2 * linkW * 1.25))));
+  const x = u * N, k0 = Math.round(x);
+  const K = Math.max(1, Math.round(1 + 3 * p.detail));        // hanging arcs per tile
+  const span = N / K, sag = style === 'hanging' ? (0.15 + 0.85 * p.variation) * Math.min(span * 0.35, (N / M) * 0.45) : 0;
+  const cy = (xx) => { const t = fract(xx / span); return sag * 4 * t * (1 - t); };
+  const dcy = (xx) => { const t = fract(xx / span); return sag * 4 * (1 - 2 * t) / span; };
+  const yRow = v * M, j0 = Math.floor(yRow);
+  const maxH = style === 'curb' ? 2.6 * rw : 2 * rw + rC;
+  let best = 0;
+  for (let dj = -1; dj <= 1; dj++) {
+    const j = j0 + dj;
+    const yc = (yRow - (j + 0.5)) * (N / M) - (sag ? -sag * 0.5 : 0);   // link units from the row axis (hanging: centred on the sag)
+    for (let dk = -1; dk <= 1; dk++) {
+      const k = k0 + dk;
+      const cyk = sag ? cy(k) : 0, ang = sag ? Math.atan(dcy(k)) : 0;
+      const tilt = style === 'curb' ? ((mod(k, 2) ? 1 : -1) * 0.42) : 0;
+      const th = ang + tilt, c = Math.cos(th), s = Math.sin(th);
+      const dx = x - k, dy = yc - cyk;
+      const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+      const flat = style === 'curb' ? true : (mod(k, 2) === 0);
+      let h = linkTop(lx, ly, flat, rw, rC, a, style === 'stud');
+      if (h > 0 && style === 'curb' && mod(k, 2)) h += 0.45 * rw;   // twisted links ride over their neighbours
+      if (h > best) best = h;
+    }
+  }
+  return clamp01(best / maxH);
+}
+
+/** Distance from (x, y) to a curve y = f(x) with slope g, in the same units. */
+const curveDist = (y, f, g) => Math.abs(y - f) / Math.sqrt(1 + g * g);
+
+/** Tapered spike from (0,0) in direction (dx, dy), length L, base half-width w → height factor (0 if missed). */
+function spike(px, py, dx, dy, L, w) {
+  const t = px * dx + py * dy;
+  if (t < 0 || t > L) return 0;
+  const n = Math.abs(-px * dy + py * dx), half = w * (1 - t / L);
+  return n < half ? Math.sqrt(1 - (n / half) * (n / half)) * (1 - 0.25 * t / L) : 0;
+}
+
+/** Barbed wire: two twisted strands (or one), 2- or 4-point barbs. */
+function barbedField(C, p, u, v, style) {
+  const M = Math.max(1, Math.round(p.count));               // wires per tile
+  const x = u * M, yRow = v * M, j = Math.floor(yRow);
+  const N = C.N;                                            // twists per tile
+  const P = M / N;                                          // twist pitch (row units)
+  const rw = 0.018 + 0.03 * p.width;
+  const A = style === 'single' ? 0 : rw * 1.15;
+  const wob = 0.08 * p.variation * noise(u, (mod(j, M) + 0.5) / M, 3, C.S + 21);
+  const y = yRow - j - 0.5 - wob;
+  let h = 0;
+  const strands = style === 'single' ? [0] : [0, Math.PI];
+  for (const ph of strands) {
+    const th = TAU_ * x / P + ph;
+    const ys = A * Math.cos(th), zs = Math.sin(th), g = -A * TAU_ / P * Math.sin(th);
+    const d = curveDist(y, ys, g);
+    if (d < rw) h = Math.max(h, 0.45 + (A ? 0.22 * zs : 0.2) + 0.33 * dome(d / rw));
+  }
+  // barbs
+  const nb = Math.max(1, Math.round(N / Math.max(1, Math.round(1 + 3 * (1 - p.density)))));
+  const Pb = M / nb, kb = Math.round(x / Pb - 0.5), bx = x - (kb + 0.5) * Pb;
+  const L = rw * (3 + 6 * p.detail) + 0.03, bw = rw * 1.25;
+  // the wrap: a tight coil clamping the strands
+  if (Math.abs(bx) < rw * 1.7 && Math.abs(y) < A + rw * 1.4) {
+    const coil = 0.5 + 0.5 * Math.cos(TAU_ * bx / (rw * 1.1));
+    h = Math.max(h, 0.72 + 0.2 * coil * dome(Math.abs(y) / (A + rw * 1.4)));
+  }
+  const dirs = style === 'barb2' ? [[0.5, -0.866], [-0.5, 0.866]]
+    : [[0.62, -0.78], [-0.62, -0.78], [0.62, 0.78], [-0.62, 0.78]];
+  for (const [dx, dy] of dirs) {
+    const f = spike(bx, y, dx, dy, L, bw);
+    if (f > 0) h = Math.max(h, 0.62 + 0.38 * f);
+  }
+  return h;
+}
+
+/** Razor (concertina) wire: a splayed helical coil seen from above, with flat blades. */
+function razorField(C, p, u, v) {
+  const M = Math.max(1, Math.round(p.count));
+  const x = u * M, yRow = v * M, j = Math.floor(yRow);
+  const y = yRow - j - 0.5;
+  const N = C.N, pp = M / N;                                // loop pitch (row units)
+  const R = 0.34, cs = 0.7 + 0.5 * p.variation;           // coil radius, splay
+  const rw = 0.012 + 0.016 * p.width;
+  const X = (th) => pp * th / TAU_ + cs * R * Math.sin(th);
+  let best = Infinity, bth = 0;
+  const i0 = Math.floor(x / pp);
+  for (let i = i0 - 2; i <= i0 + 2; i++) {
+    for (let s = 0; s < 40; s++) {
+      const th = TAU_ * (i + s / 40);
+      const d = Math.hypot(x - X(th), y - R * Math.cos(th));
+      if (d < best) { best = d; bth = th; }
+    }
+  }
+  for (let it = 0, step = TAU_ / 80; it < 6; it++, step *= 0.5) {   // refine
+    for (const th of [bth - step, bth + step]) {
+      const d = Math.hypot(x - X(th), y - R * Math.cos(th));
+      if (d < best) { best = d; bth = th; }
+    }
+  }
+  const zs = Math.sin(bth);
+  let h = best < rw ? 0.45 + 0.3 * zs + 0.25 * dome(best / rw) : 0;
+  // blades: flat double-pointed barbs every 1/nb turn, along the tangent
+  const nb = 4 + Math.round(8 * p.density);
+  const kb = Math.round(bth / TAU_ * nb), tb = kb / nb * TAU_;
+  const bxp = X(tb), byp = R * Math.cos(tb);
+  const tx = pp / TAU_ + cs * R * Math.cos(tb), ty = -R * Math.sin(tb), tl = Math.hypot(tx, ty) || 1;
+  const ux = tx / tl, uy = ty / tl;
+  const px = x - bxp, py = y - byp;
+  const along = px * ux + py * uy, across = Math.abs(-px * uy + py * ux);
+  const Lb = rw * (1.5 + 2.5 * p.detail), wb = rw * 2;
+  if (Math.abs(along) < Lb) {
+    // blade: barbed both ways (a 'W' outline) — wide at the core, pointed tips
+    const t = Math.abs(along) / Lb, half = wb * (1 - t) + rw * 0.6 * (1 - t);
+    if (across < half) h = Math.max(h, 0.5 + 0.3 * Math.sin(tb) + 0.12);
+  }
+  return h;
+}
 
 const A = {
   diamondPlate(C, p, u, v) {
@@ -383,6 +536,14 @@ const A = {
     }
     return 0.5;
   },
+  chain: (C, p, u, v) => chainField(C, p, u, v, 'classic'),
+  studChain: (C, p, u, v) => chainField(C, p, u, v, 'stud'),
+  curbChain: (C, p, u, v) => chainField(C, p, u, v, 'curb'),
+  hangingChain: (C, p, u, v) => chainField(C, p, u, v, 'hanging'),
+  barbed4: (C, p, u, v) => barbedField(C, p, u, v, 'barb4'),
+  barbed2: (C, p, u, v) => barbedField(C, p, u, v, 'barb2'),
+  barbedSingle: (C, p, u, v) => barbedField(C, p, u, v, 'single'),
+  razor: (C, p, u, v) => razorField(C, p, u, v),
   brushed(C, p, u, v) {
     let h = 0, amp = 1, Py = C.N * 24, Px = 1;
     for (let o = 0; o < 4; o++) {
